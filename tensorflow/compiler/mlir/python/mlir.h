@@ -19,6 +19,7 @@ limitations under the License.
 #define TENSORFLOW_COMPILER_MLIR_PYTHON_MLIR_H_
 
 #include <string>
+#include <vector>
 
 #include "absl/strings/string_view.h"
 #include "tensorflow/c/eager/c_api.h"
@@ -95,13 +96,18 @@ std::string ExperimentalConvertSavedModelV1ToMlirLite(
 //   A string of textual MLIR representing the raw imported SavedModel.
 std::string ExperimentalConvertSavedModelV1ToMlir(
     const std::string &saved_model_path, const std::string &exported_names_str,
-    const std::string &tags, bool lift_variables, bool upgrade_legacy,
+    const std::string &tags, bool lift_variables,
+    bool include_variables_in_initializers, bool upgrade_legacy,
     bool show_debug_info, TF_Status *status);
 
 std::string ExperimentalRunPassPipeline(const std::string &mlir_txt,
                                         const std::string &pass_pipeline,
                                         bool show_debug_info,
                                         TF_Status *status);
+
+// Writes the input textual MLIR as bytecode to output file.
+void ExperimentalWriteBytecode(const std::string &filename,
+                               const std::string &mlir_txt, TF_Status *status);
 
 }  // namespace tensorflow
 

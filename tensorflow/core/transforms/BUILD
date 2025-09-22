@@ -1,11 +1,13 @@
 load("@llvm-project//mlir:tblgen.bzl", "gentbl_cc_library", "td_library")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//tensorflow:tensorflow.bzl", "tf_cc_binary", "tf_cc_test")
-load("//tensorflow:tensorflow.bzl", "get_compatible_with_cloud")
+load("//tensorflow:tensorflow.default.bzl", "get_compatible_with_portable")
 
 package(
-    default_compatible_with = get_compatible_with_cloud(),
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    default_compatible_with = get_compatible_with_portable(),
     default_visibility = [
-        "//tensorflow/compiler/mlir/tensorflow:__subpackages__",
+        "//learning/brain/contrib/tpu_modeling/inference_converter_v2:__subpackages__",
         "//tensorflow/core:__subpackages__",
         "//tensorflow/tools/tfg_graph_transforms:__subpackages__",
     ],
@@ -14,31 +16,15 @@ package(
 
 gentbl_cc_library(
     name = "PassIncGen",
-    tbl_outs = [
-        (
-            [
-                "-gen-pass-decls",
-                "--name",
-                "TFGraph",
-            ],
-            "passes.h.inc",
-        ),
-    ],
+    tbl_outs = {"passes.h.inc": [
+        "-gen-pass-decls",
+        "--name",
+        "TFGraph",
+    ]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes.td",
     deps = [
         "@llvm-project//mlir:PassBaseTdFiles",
-    ],
-)
-
-cc_library(
-    name = "PassDetail",
-    hdrs = ["pass_detail.h"],
-    deps = [
-        ":PassIncGen",
-        "//tensorflow/core/ir:Dialect",
-        "@llvm-project//mlir:Pass",
-        "@llvm-project//mlir:Support",
     ],
 )
 
@@ -62,9 +48,15 @@ cc_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
+        "//tensorflow/core/framework:node_def_proto_cc",
+        "//tensorflow/core/framework:tensor_proto_cc",
         "//tensorflow/core/ir:Dialect",
         "//tensorflow/core/ir/importexport:convert_tensor",
         "//tensorflow/core/ir/importexport:graphdef_export",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
@@ -73,12 +65,7 @@ cc_library(
 
 gentbl_cc_library(
     name = "PDLLUtilsIncGen",
-    tbl_outs = [
-        (
-            ["-x=cpp"],
-            "utils/pdll/PDLLUtils.h.inc",
-        ),
-    ],
+    tbl_outs = {"utils/pdll/PDLLUtils.h.inc": ["-x=cpp"]},
     tblgen = "@llvm-project//mlir:mlir-pdll",
     td_file = "utils/pdll/utils.pdll",
     deps = [
@@ -99,7 +86,7 @@ cc_library(
     deps = [
         ":PDLLUtilsIncGen",
         ":utils",
-        "//tensorflow/core/ir:Dialect",
+        "//tensorflow/core:framework_types_hdr",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
     ],
@@ -111,9 +98,13 @@ cc_library(
     hdrs = ["utils/op_cat_helper.h"],
     deps = [
         "//tensorflow/core:framework",
+        "//tensorflow/core/framework:op_def_proto_cc",
+        "//tensorflow/core/framework:types_proto_cc",
         "//tensorflow/core/ir:Dialect",
+        "@com_google_absl//absl/status",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
     ],
 )
 
@@ -148,12 +139,13 @@ cc_library(
     deps = [
         "//tensorflow/compiler/mlir/tensorflow:error_util",
         "//tensorflow/core:core_cpu_base",
+        "//tensorflow/core/framework:graph_debug_info_proto_cc",
         "//tensorflow/core/ir/importexport:graphdef_export",
         "//tensorflow/core/ir/importexport:graphdef_import",
         "//tensorflow/core/platform:status",
         "//tensorflow/core/platform:statusor",
-        "//tensorflow/core/protobuf:for_core_protos_cc",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
@@ -170,6 +162,7 @@ tf_cc_test(
         "//tensorflow/core/common_runtime:graph_constructor",
         "//tensorflow/core/ir:Dialect",
         "//tensorflow/core/platform:status",
+        "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
     ],
@@ -200,12 +193,13 @@ tf_cc_binary(
     srcs = ["tfg-transforms-opt.cc"],
     deps = [
         ":PassRegistration",
-        "//tensorflow/compiler/mlir:init_mlir",
         "//tensorflow/core:all_kernels",
         "//tensorflow/core:ops",
         "//tensorflow/core/ir:Dialect",
         "//tensorflow/core/ir:tf_op_registry",
         "//tensorflow/core/ir/types:Dialect",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
         "@llvm-project//mlir:MlirOptLib",
         "@llvm-project//mlir:Transforms",
     ],

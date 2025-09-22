@@ -27,9 +27,8 @@ limitations under the License.
 #include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/graph/node_builder.h"
 #include "tensorflow/core/protobuf/error_codes.pb.h"
-#include "tensorflow/stream_executor/lib/statusor.h"
 
-using stream_executor::port::StatusOr;
+using tsl::StatusOr;
 
 namespace tensorflow {
 
@@ -48,9 +47,10 @@ std::optional<string> GetStringAttr(const Node& n, const string& attr_name) {
 
 // Adds a value to the node's list attribute.
 template <typename T>
-Status AppendToListAttr(Node* n, const string& attr_name, const string& value) {
+absl::Status AppendToListAttr(Node* n, const string& attr_name,
+                              const string& value) {
   std::vector<T> attr_value;
-  Status s = GetNodeAttr(n->attrs(), attr_name, &attr_value);
+  absl::Status s = GetNodeAttr(n->attrs(), attr_name, &attr_value);
   if (!s.ok() && s.code() != error::NOT_FOUND) {
     return s;
   }
@@ -58,7 +58,7 @@ Status AppendToListAttr(Node* n, const string& attr_name, const string& value) {
   n->ClearAttr(attr_name);
   attr_value.push_back(value);
   n->AddAttr(attr_name, attr_value);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // Replaces attribute value.
@@ -70,7 +70,7 @@ void ReplaceAttr(Node* n, const string& attr_name, const T& value) {
 
 // Step 1 for `PreprocessEdgesBetweenOutsideCompilations`. See comments of
 // `PreprocessEdgesBetweenOutsideCompilations` for details.
-Status PreprocessControlEdgesBetweenOutsideCompilations(
+absl::Status PreprocessControlEdgesBetweenOutsideCompilations(
     Graph* g, const string& outside_compilation_attr_name) {
   // Gather edges to remove. We should not remove the edge while iterating.
   std::vector<const Edge*> edges_to_remove;
@@ -105,12 +105,12 @@ Status PreprocessControlEdgesBetweenOutsideCompilations(
   for (auto e : edges_to_remove) {
     g->RemoveEdge(e);
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // Step 2 for `PreprocessEdgesBetweenOutsideCompilations`. See comments of
 // `PreprocessEdgesBetweenOutsideCompilations` for details.
-Status PreprocessDataEdgesBetweenOutsideCompilations(
+absl::Status PreprocessDataEdgesBetweenOutsideCompilations(
     Graph* g, const string& outside_compilation_attr_name) {
   // Gather edges between outside compilation and host computation. Notice that
   // we do not store `Edge*` directly because we remove some nodes while adding
@@ -189,12 +189,12 @@ Status PreprocessDataEdgesBetweenOutsideCompilations(
       }
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // Step 1 for `PostprocessEdgesBetweenOutsideCompilations`. See comments of
 // `PostprocessEdgesBetweenOutsideCompilations` for details.
-Status PostprocessDataEdgesBetweenOutsideCompilations(
+absl::Status PostprocessDataEdgesBetweenOutsideCompilations(
     Graph* g, const string& outside_compilation_attr_name) {
   // Gather all outside compilation to outside compilation nodes.
   std::vector<Node*> placeholder_nodes;
@@ -265,19 +265,19 @@ Status PostprocessDataEdgesBetweenOutsideCompilations(
     // Remove placeholder node.
     g->RemoveNode(n);
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // Step 2 for `PostprocessEdgesBetweenOutsideCompilations`. See comments of
 // `PostprocessEdgesBetweenOutsideCompilations` for details.
-Status PostprocessControlEdgesBetweenOutsideCompilations(
+absl::Status PostprocessControlEdgesBetweenOutsideCompilations(
     Graph* g, const string& outside_compilation_attr_name) {
   auto node_name_index = g->BuildNodeNameIndex();
 
   // Reconnect outside compilation to outside compilation control edge.
   for (Node* n : g->nodes()) {
     std::vector<string> control_deps;
-    Status s =
+    absl::Status s =
         GetNodeAttr(n->attrs(), kXlaControlDependenciesWithinXlaClusterAttrName,
                     &control_deps);
     if (!s.ok()) {
@@ -298,7 +298,7 @@ Status PostprocessControlEdgesBetweenOutsideCompilations(
       }
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 }  // namespace
 
@@ -318,7 +318,7 @@ const char kXlaLiftedArgOutsideCompilationAttrName[] = "_xla_lifted_arg_oc";
 const char kXlaOutsideCompilationInputsAttrName[] = "_xla_oc_inputs";
 const char kXlaIsPlaceholderForArg[] = "_xla_is_placeholder_for_arg";
 
-Status PerformStaticShapeInferenceBeforeEncapsulation(Graph* g) {
+absl::Status PerformStaticShapeInferenceBeforeEncapsulation(Graph* g) {
   // Perform shape inference.
   std::map<int, InferredShape> arg_shapes;
   GraphShapeInfo shape_info;
@@ -338,10 +338,11 @@ Status PerformStaticShapeInferenceBeforeEncapsulation(Graph* g) {
     n->AddAttr(kXlaInferredShapesAttrName, output_shapes);
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<std::unique_ptr<absl::flat_hash_map<string, std::vector<string>>>>
+absl::StatusOr<
+    std::unique_ptr<absl::flat_hash_map<string, std::vector<string>>>>
 OutsideCompilationClusterDependencies(
     const Graph* g, const string& outside_compilation_attr_name) {
   auto cluster_deps = std::make_unique<
@@ -378,7 +379,7 @@ OutsideCompilationClusterDependencies(
   return std::move(cluster_deps_ordered);
 }
 
-Status PreprocessEdgesBetweenOutsideCompilations(
+absl::Status PreprocessEdgesBetweenOutsideCompilations(
     Graph* g, const string& outside_compilation_attr_name) {
   // Remove edges from source node to outside compilation nodes, and edges
   // from outside compilation nodes to sink node.
@@ -401,16 +402,16 @@ Status PreprocessEdgesBetweenOutsideCompilations(
       g, outside_compilation_attr_name));
   TF_RETURN_IF_ERROR(PreprocessDataEdgesBetweenOutsideCompilations(
       g, outside_compilation_attr_name));
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status PostprocessEdgesBetweenOutsideCompilations(
+absl::Status PostprocessEdgesBetweenOutsideCompilations(
     Graph* g, const string& outside_compilation_attr_name) {
   TF_RETURN_IF_ERROR(PostprocessDataEdgesBetweenOutsideCompilations(
       g, outside_compilation_attr_name));
   TF_RETURN_IF_ERROR(PostprocessControlEdgesBetweenOutsideCompilations(
       g, outside_compilation_attr_name));
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace tensorflow

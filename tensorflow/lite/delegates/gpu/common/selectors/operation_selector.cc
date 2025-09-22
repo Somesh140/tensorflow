@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/common/selectors/operation_selector.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -23,9 +24,12 @@ limitations under the License.
 
 #include "absl/strings/str_cat.h"
 #include "absl/types/any.h"
+#include "absl/types/span.h"
 #include "tensorflow/lite/delegates/gpu/common/data_type.h"
 #include "tensorflow/lite/delegates/gpu/common/flops_util.h"
 #include "tensorflow/lite/delegates/gpu/common/gpu_info.h"
+#include "tensorflow/lite/delegates/gpu/common/model.h"
+#include "tensorflow/lite/delegates/gpu/common/model_hints.h"
 #include "tensorflow/lite/delegates/gpu/common/operations.h"
 #include "tensorflow/lite/delegates/gpu/common/selectors/convolution_selector.h"
 #include "tensorflow/lite/delegates/gpu/common/selectors/convolution_transposed_selector.h"
@@ -33,14 +37,18 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/common/selectors/dw_convolution_selector.h"
 #include "tensorflow/lite/delegates/gpu/common/selectors/fully_connected_selector.h"
 #include "tensorflow/lite/delegates/gpu/common/selectors/simple_selectors.h"
+#include "tensorflow/lite/delegates/gpu/common/selectors/subgraph.h"
 #include "tensorflow/lite/delegates/gpu/common/shape.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
+#include "tensorflow/lite/delegates/gpu/common/task/gpu_operation.h"
 #include "tensorflow/lite/delegates/gpu/common/task/tensor_desc.h"
 #include "tensorflow/lite/delegates/gpu/common/task/weights_conversion.h"
+#include "tensorflow/lite/delegates/gpu/common/task/weights_layout.h"
 #include "tensorflow/lite/delegates/gpu/common/tasks/elementwise.h"
 #include "tensorflow/lite/delegates/gpu/common/tasks/mean_stddev_normalization.h"
-#include "tensorflow/lite/delegates/gpu/common/tasks/transpose.h"
 #include "tensorflow/lite/delegates/gpu/common/tensor.h"
+#include "tensorflow/lite/delegates/gpu/common/types.h"
+#include "tensorflow/lite/delegates/gpu/common/util.h"
 #include "tensorflow/lite/delegates/gpu/common/winograd_util.h"
 
 namespace tflite {
@@ -303,6 +311,25 @@ void AddConvSharedWeights(
       shared_conv_weights->back().global_const_ids.push_back(tensor_id);
     }
   }
+}
+
+template <DataType DataTypeT, typename T>
+absl::Status CreateElementwiseTwoInputWithOneConstant(
+    const GpuInfo& gpu_info, const OperationDef& op_def, OperationType op_type,
+    const Node& node, const Value* input, const Value* output,
+    std::unique_ptr<GPUOperation>* gpu_op) {
+  auto attr = absl::any_cast<ElementwiseAttributesBase<DataTypeT, T>>(
+      node.operation.attributes);
+  GPUOperation operation;
+  if (input->tensor.shape != output->tensor.shape) {
+    operation = CreateElementwiseWithBroadcast(gpu_info, op_def, op_type, attr,
+                                               input->tensor.shape,
+                                               output->tensor.shape);
+  } else {
+    operation = CreateElementwise(gpu_info, op_def, op_type, attr);
+  }
+  *gpu_op = std::make_unique<GPUOperation>(std::move(operation));
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -602,7 +629,7 @@ absl::Status GPUOperationFromNodePart0(
     }
     case OperationType::GATHER: {
       auto attr = absl::any_cast<GatherAttributes>(node.operation.attributes);
-      RETURN_IF_ERROR(SelectGather(attr, op_def, gpu_op));
+      RETURN_IF_ERROR(SelectGather(attr, op_def, gpu_info, gpu_op));
       return absl::OkStatus();
     }
     case OperationType::LSTM: {
@@ -679,7 +706,7 @@ absl::Status GPUOperationFromNodePart0(
       return absl::OkStatus();
     }
     case OperationType::SOFTMAX: {
-      SelectSoftmax(inputs[0]->tensor.shape, op_def, gpu_op);
+      SelectSoftmax(gpu_info, inputs[0]->tensor.shape, op_def, gpu_op);
       return absl::OkStatus();
     }
     case OperationType::SPACE_TO_DEPTH: {
@@ -741,17 +768,25 @@ absl::Status GPUOperationFromNodePart0(
     case OperationType::COS:
     case OperationType::ELU:
     case OperationType::EXP:
+    case OperationType::GELU:
     case OperationType::HARD_SWISH:
     case OperationType::LOG:
     case OperationType::NEG:
     case OperationType::RSQRT:
     case OperationType::SIGMOID:
+    case OperationType::SIGN:
     case OperationType::SIN:
     case OperationType::SQRT:
     case OperationType::SQUARE:
     case OperationType::TANH: {
-      GPUOperation operation =
-          CreateElementwiseOneInput(gpu_info, op_def, op_type);
+      GPUOperation operation;
+      if (inputs[0]->tensor.shape != outputs[0]->tensor.shape) {
+        operation = CreateElementwiseOneInputWithBroadcast(
+            gpu_info, op_def, op_type, inputs[0]->tensor.shape,
+            outputs[0]->tensor.shape);
+      } else {
+        operation = CreateElementwiseOneInput(gpu_info, op_def, op_type);
+      }
       *gpu_op = std::make_unique<GPUOperation>(std::move(operation));
       return absl::OkStatus();
     }
@@ -761,6 +796,7 @@ absl::Status GPUOperationFromNodePart0(
     case OperationType::GREATER_EQUAL:
     case OperationType::LESS:
     case OperationType::LESS_EQUAL:
+    case OperationType::LOGICAL_AND:
     case OperationType::MAXIMUM:
     case OperationType::MINIMUM:
     case OperationType::MUL:
@@ -769,17 +805,34 @@ absl::Status GPUOperationFromNodePart0(
     case OperationType::SQUARED_DIFF:
     case OperationType::SUB: {
       if (inputs.size() == 2) {
-        GPUOperation operation =
-            CreateElementwiseTwoInput(op_def, op_type, inputs[1]->tensor.shape);
+        GPUOperation operation;
+        if (inputs[0]->tensor.shape != outputs[0]->tensor.shape) {
+          operation = CreateElementwiseTwoInputWithBroadcast(
+              op_def, op_type, inputs[0]->tensor.shape, inputs[1]->tensor.shape,
+              outputs[0]->tensor.shape);
+        } else {
+          operation = CreateElementwiseTwoInput(op_def, op_type,
+                                                inputs[1]->tensor.shape);
+        }
         *gpu_op = std::make_unique<GPUOperation>(std::move(operation));
         return absl::OkStatus();
       } else if (inputs.size() == 1 && node.operation.attributes.has_value()) {
-        auto attr =
-            absl::any_cast<ElementwiseAttributes>(node.operation.attributes);
-        GPUOperation operation =
-            CreateElementwise(gpu_info, op_def, op_type, attr);
-        *gpu_op = std::make_unique<GPUOperation>(std::move(operation));
-        return absl::OkStatus();
+        Value* input = inputs[0];
+        Value* output = outputs[0];
+        switch (inputs[0]->tensor.type) {
+          case DataType::BOOL:
+            return CreateElementwiseTwoInputWithOneConstant<DataType::BOOL,
+                                                            bool>(
+                gpu_info, op_def, op_type, node, input, output, gpu_op);
+          case DataType::INT32:
+            return CreateElementwiseTwoInputWithOneConstant<DataType::INT32,
+                                                            int32_t>(
+                gpu_info, op_def, op_type, node, input, output, gpu_op);
+          default:
+            return CreateElementwiseTwoInputWithOneConstant<DataType::FLOAT32,
+                                                            float>(
+                gpu_info, op_def, op_type, node, input, output, gpu_op);
+        }
       }
       return absl::UnimplementedError(absl::StrCat(
           "No support of ", node.operation.type, " with this parameters"));

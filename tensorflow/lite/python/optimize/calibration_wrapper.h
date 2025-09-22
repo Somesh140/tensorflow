@@ -27,7 +27,7 @@ limitations under the License.
 // automatically move <Python.h> before <locale>.
 #include <Python.h>
 
-#include "tensorflow/lite/interpreter.h"
+#include "tensorflow/lite/core/interpreter.h"
 
 // We forward declare TFLite classes here to avoid exposing them to SWIG.
 namespace tflite {
@@ -37,7 +37,9 @@ class BuiltinOpResolver;
 }  // namespace builtin
 }  // namespace ops
 
+namespace impl {
 class FlatBufferModel;
+}
 
 namespace interpreter_wrapper {
 class PythonErrorReporter;
@@ -96,9 +98,10 @@ class CalibrationWrapper {
 
   // Disables per-channel quantization, can be used to produce smaller
   // models but may cause accuracy issues.
-  PyObject* QuantizeModel(int input_py_type, int output_py_type,
-                          bool allow_float, int activations_py_type,
-                          int bias_py_type, bool disable_per_channel);
+  PyObject* QuantizeModel(
+      int input_py_type, int output_py_type, bool allow_float,
+      int activations_py_type, int bias_py_type, bool disable_per_channel,
+      bool disable_per_channel_quantization_for_dense_layers);
 
   // Writes the in-memory calibration results to the model flatbuffer. The
   // produced model is as same as the original input model, but the min/max
@@ -109,12 +112,11 @@ class CalibrationWrapper {
   // CalibrationWrapper is not copyable or assignable. We avoid the use of
   // CalibrationWrapper() = delete here for SWIG compatibility.
   CalibrationWrapper(
-      std::unique_ptr<tflite::Interpreter> interpreter,
-      std::unique_ptr<tflite::ops::builtin::BuiltinOpResolver> resolver,
-      std::unique_ptr<tflite::interpreter_wrapper::PythonErrorReporter>
-          error_reporter,
-      std::unique_ptr<tflite::FlatBufferModel> model,
-      std::unique_ptr<tflite::optimize::calibration::CalibrationReader> reader,
+      std::unique_ptr<Interpreter> interpreter,
+      std::unique_ptr<ops::builtin::BuiltinOpResolver> resolver,
+      std::unique_ptr<interpreter_wrapper::PythonErrorReporter> error_reporter,
+      std::unique_ptr<impl::FlatBufferModel> model,
+      std::unique_ptr<optimize::calibration::CalibrationReader> reader,
       std::unique_ptr<std::string> model_str_);
 
   CalibrationWrapper(const CalibrationWrapper& rhs);
@@ -122,12 +124,11 @@ class CalibrationWrapper {
   PyObject* SetTensor(int index, PyObject* value);
   PyObject* SetTensor(int index, PyObject* value, std::string signature_key);
 
-  std::unique_ptr<tflite::Interpreter> interpreter_;
-  std::unique_ptr<tflite::interpreter_wrapper::PythonErrorReporter>
-      error_reporter_;
-  std::unique_ptr<tflite::ops::builtin::BuiltinOpResolver> resolver_;
-  std::unique_ptr<tflite::FlatBufferModel> model_;
-  std::unique_ptr<tflite::optimize::calibration::CalibrationReader> reader_;
+  std::unique_ptr<Interpreter> interpreter_;
+  std::unique_ptr<interpreter_wrapper::PythonErrorReporter> error_reporter_;
+  std::unique_ptr<ops::builtin::BuiltinOpResolver> resolver_;
+  std::unique_ptr<impl::FlatBufferModel> model_;
+  std::unique_ptr<optimize::calibration::CalibrationReader> reader_;
   std::unique_ptr<std::string> model_str_;
 };
 

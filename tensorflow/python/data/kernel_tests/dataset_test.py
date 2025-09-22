@@ -25,6 +25,7 @@ from tensorflow.core.framework import graph_pb2
 from tensorflow.python.data.experimental.ops import testing
 from tensorflow.python.data.kernel_tests import test_base
 from tensorflow.python.data.ops import dataset_ops
+from tensorflow.python.data.ops import debug_mode
 from tensorflow.python.data.ops import optional_ops
 from tensorflow.python.data.ops import options as options_lib
 from tensorflow.python.data.ops import readers
@@ -251,7 +252,7 @@ class DatasetTest(test_base.DatasetTestBase, parameterized.TestCase):
     dataset = dataset.filter(lambda x: x > 10)
     debug_string = dataset.__debug_string__()
     for transformation in ["Range", "Map", "Filter"]:
-      self.assertContainsSubsequence(debug_string, transformation)
+      self.assertIn(transformation, debug_string)
 
   @combinations.generate(test_base.default_test_combinations())
   def testNoWarnings(self):
@@ -401,7 +402,7 @@ class DatasetTest(test_base.DatasetTestBase, parameterized.TestCase):
     dataset = dataset_ops.Dataset.range(10)
     with ops.Graph().as_default():
       with self.assertRaisesRegex(ValueError,
-                                  "make sure that the dataset is created in "
+                                  "Make sure that the dataset is created in "
                                   "the same graph as the iterator"):
         _ = dataset_ops.make_one_shot_iterator(dataset)
 
@@ -411,7 +412,7 @@ class DatasetTest(test_base.DatasetTestBase, parameterized.TestCase):
     dataset = dataset_ops.Dataset.range(10)
     with ops.Graph().as_default():
       with self.assertRaisesRegex(ValueError,
-                                  "make sure that the dataset is created in "
+                                  "Make sure that the dataset is created in "
                                   "the same graph as the iterator"):
         _ = dataset_ops.make_initializable_iterator(dataset)
 
@@ -625,10 +626,10 @@ class DebugDatasetTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   def setUp(self):
     super(DebugDatasetTest, self).setUp()
-    dataset_ops.toggle_debug_mode(True)
+    debug_mode.toggle_debug_mode(True)
 
   def tearDown(self):
-    dataset_ops.toggle_debug_mode(False)
+    debug_mode.toggle_debug_mode(False)
     super(DebugDatasetTest, self).tearDown()
 
   @combinations.generate(test_base.eager_only_combinations())

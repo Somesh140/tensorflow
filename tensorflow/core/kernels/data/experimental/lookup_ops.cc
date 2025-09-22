@@ -13,12 +13,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "tensorflow/core/data/root_dataset.h"
 #include "tensorflow/core/framework/dataset.h"
 #include "tensorflow/core/framework/function_handle_cache.h"
@@ -53,7 +55,7 @@ class DatasetIterator
 
   ~DatasetIterator() override {}
 
-  Status Init(OpKernelContext* ctx) {
+  absl::Status Init(OpKernelContext* ctx) {
     data::IteratorContext::Params params(ctx);
     function_handle_cache_ = std::make_unique<FunctionHandleCache>(params.flr);
     params.function_handle_cache = function_handle_cache_.get();
@@ -70,7 +72,7 @@ class DatasetIterator
         iterator_ctx_.get(), nullptr, "LookupTable", &iterator_));
     core::ScopedUnref unref(finalized_dataset);
     Next();
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   void Next() override {
@@ -88,7 +90,7 @@ class DatasetIterator
 
   const Tensor& values() const override { return tensors_[1]; }
 
-  Status status() const override { return status_; }
+  absl::Status status() const override { return status_; }
 
   int64_t total_size() const override {
     int64_t size = dataset_->Cardinality();
@@ -106,7 +108,7 @@ class DatasetIterator
   std::unique_ptr<CancellationManager> cancellation_manager_;
   std::unique_ptr<data::IteratorBase> iterator_;
   std::vector<Tensor> tensors_;
-  Status status_;
+  absl::Status status_;
 };
 
 std::unique_ptr<InitializerSerializer> MakeDatasetInitializerSerializer(
@@ -132,7 +134,7 @@ std::unique_ptr<InitializerSerializer> MakeDatasetInitializerSerializer(
               "Failed to create InitializeTableFromDataset op: ",
               builder->opts().StatusToString());
         }
-        return OkStatus();
+        return absl::OkStatus();
       },
       /*cleanup=*/std::move(unref_dataset));
 }
@@ -170,9 +172,9 @@ void InitializeTableFromDataset(OpKernelContext* ctx,
                                       dataset_shapes[1].DebugString()));
   DatasetIterator iter(dataset);
   OP_REQUIRES_OK(ctx, iter.Init(ctx));
-  Status s =
+  absl::Status s =
       table->Initialize(iter, MakeDatasetInitializerSerializer(ctx, dataset));
-  if (errors::IsFailedPrecondition(s) && table->is_initialized()) {
+  if (absl::IsFailedPrecondition(s) && table->is_initialized()) {
     LOG(INFO) << "Table already initialized from dataset.";
     return;
   }
@@ -199,7 +201,8 @@ class InitializeTableFromDatasetOp : public AsyncOpKernel {
   }
 
  private:
-  TF_DISALLOW_COPY_AND_ASSIGN(InitializeTableFromDatasetOp);
+  InitializeTableFromDatasetOp(const InitializeTableFromDatasetOp&) = delete;
+  void operator=(const InitializeTableFromDatasetOp&) = delete;
 
   data::BackgroundWorker background_worker_;
 };

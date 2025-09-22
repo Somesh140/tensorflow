@@ -14,7 +14,10 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/compiler/mlir/tfrt/analysis/tensor_array_side_effect_analysis.h"
 
+#include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/Interfaces/SideEffectInterfaces.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 
@@ -31,9 +34,7 @@ bool IsTensorArrayOp(mlir::Operation* op) {
 static bool FunctionContainsOnlyNoSideEffectOpOrTensorArrayOp(
     mlir::func::FuncOp func_op) {
   for (mlir::Operation& op : func_op.front()) {
-    if (!mlir::MemoryEffectOpInterface::hasNoEffect(&op) &&
-        !IsTensorArrayOp(&op))
-      return false;
+    if (!mlir::isMemoryEffectFree(&op) && !IsTensorArrayOp(&op)) return false;
   }
 
   return true;

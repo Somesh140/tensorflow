@@ -45,7 +45,7 @@ static void BM_UnsortedSegmentReduction(::testing::benchmark::State& state,
       DeviceFactory::NewDevice("CPU", {}, "/job:a/replica:0/task:0"));
 
   // Create inputs
-  gtl::InlinedVector<TensorValue, 4> reduction_inputs;
+  absl::InlinedVector<TensorValue, 4> reduction_inputs;
   TensorShape shape1({num_rows, num_cols});
   Tensor input(DT_FLOAT, shape1);
   // input.flat<float>().setRandom();
@@ -67,7 +67,7 @@ static void BM_UnsortedSegmentReduction(::testing::benchmark::State& state,
                   .Input(FakeInput(DT_INT32))
                   .Input(FakeInput(DT_INT32))
                   .Finalize(&reduction_node_def));
-  Status status;
+  absl::Status status;
   std::unique_ptr<OpKernel> reduction_op(
       CreateOpKernel(DEVICE_CPU, device.get(), cpu_allocator(),
                      reduction_node_def, TF_GRAPH_DEF_VERSION, &status));
@@ -75,7 +75,7 @@ static void BM_UnsortedSegmentReduction(::testing::benchmark::State& state,
   OpKernelContext::Params params;
   params.device = device.get();
   params.frame_iter = FrameAndIter(0, 0);
-  params.inputs = &reduction_inputs;
+  params.inputs = reduction_inputs;
   params.op_kernel = reduction_op.get();
   std::vector<AllocatorAttributes> attrs;
   test::SetOutputAttrs(&params, &attrs);
@@ -114,7 +114,7 @@ static void BM_SegmentReduction(::testing::benchmark::State& state,
       DeviceFactory::NewDevice("CPU", {}, "/job:a/replica:0/task:0"));
 
   // Create inputs
-  gtl::InlinedVector<TensorValue, 4> reduction_inputs;
+  absl::InlinedVector<TensorValue, 4> reduction_inputs;
   TensorShape shape1({num_rows, num_cols});
   Tensor input1(DT_FLOAT, shape1);
   reduction_inputs.push_back({nullptr, &input1});
@@ -131,14 +131,14 @@ static void BM_SegmentReduction(::testing::benchmark::State& state,
                   .Input(FakeInput(DT_FLOAT))
                   .Input(FakeInput(DataTypeToEnum<Index>::v()))
                   .Finalize(&reduction_node_def));
-  Status status;
+  absl::Status status;
   std::unique_ptr<OpKernel> reduction_op(
       CreateOpKernel(DEVICE_CPU, device.get(), cpu_allocator(),
                      reduction_node_def, TF_GRAPH_DEF_VERSION, &status));
   OpKernelContext::Params params;
   params.device = device.get();
   params.frame_iter = FrameAndIter(0, 0);
-  params.inputs = &reduction_inputs;
+  params.inputs = reduction_inputs;
   params.op_kernel = reduction_op.get();
   std::vector<AllocatorAttributes> attrs;
   test::SetOutputAttrs(&params, &attrs);

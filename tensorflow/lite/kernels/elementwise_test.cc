@@ -14,11 +14,17 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <initializer_list>
+#include <limits>
+#include <type_traits>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "tensorflow/lite/core/c/common.h"
+#include "tensorflow/lite/kernels/internal/portable_tensor_utils.h"
 #include "tensorflow/lite/kernels/test_util.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
@@ -35,6 +41,17 @@ class ElementWiseOpBaseModel : public SingleOpModel {
  protected:
   int input_;
   int output_;
+};
+
+class ElementWiseOpIntModel : public ElementWiseOpBaseModel {
+ public:
+  ElementWiseOpIntModel(BuiltinOperator op,
+                        std::initializer_list<int> input_shape) {
+    input_ = AddInput(TensorType_INT32);
+    output_ = AddOutput(TensorType_INT32);
+    SetBuiltinOp(op, BuiltinOptions_NONE, 0);
+    BuildInterpreter({input_shape});
+  }
 };
 
 class ElementWiseOpFloatModel : public ElementWiseOpBaseModel {
@@ -115,6 +132,24 @@ class ElementWiseOpBoolModel : public ElementWiseOpBaseModel {
   }
 };
 
+// A LUT of 256 values is used in the int8 case. For the int16 case a 513 LUT is
+// used but as the last value is only used for interpolation we only have 512
+// quantized steps.
+template <typename T>
+inline float GetLUTTolerance(float input_min, float input_max, float output_min,
+                             float output_max) {
+  static_assert(
+      std::is_same<T, int8_t>::value || std::is_same<T, int16_t>::value,
+      "T must be an int8_t or int16_t.");
+
+  const float range_sum = (input_max - input_min) + (output_max - output_min);
+  if (std::is_same<T, int8_t>::value) {
+    return range_sum / 256.0f;
+  } else {
+    return range_sum / 512.0f;
+  }
+}
+
 template <typename T>
 float GetQuantizationStep(float min, float max) {
   const float kQuantizedStep = (max - min) / (std::numeric_limits<T>::max() -
@@ -149,6 +184,52 @@ TEST(ElementWise, Log) {
   EXPECT_THAT(m.GetTensorShape(m.output()), ElementsAreArray({1, 1, 4, 1}));
 }
 
+TEST(ElementWise, LogInt8) {
+  const float input_min = 0.0f;
+  const float input_max = 13.2f;
+  const float output_min = -2.3026f;
+  const float output_max = 2.5802f;
+
+  const float kQuantizedTolerance =
+      GetLUTTolerance<int8_t>(input_min, input_max, output_min, output_max);
+
+  ElementWiseOpQuantizedModel m(
+      BuiltinOperator_LOG,
+      {TensorType_INT8, {1, 2, 2, 2}, input_min, input_max},
+      {TensorType_INT8, {}, output_min, output_max});
+  m.QuantizeAndPopulate<int8_t>(
+      m.input(), {0.1f, 0.5f, 1.0f, 1.15f, 2.3f, 5.01f, 11.0f, 13.2f});
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(
+      m.ExtractDequantVector<int8_t>(m.output()),
+      ElementsAreArray(ArrayFloatNear({-2.3026f, -0.6931f, 0.0f, 0.1398f,
+                                       0.8329f, 1.6114, 2.3979f, 2.5802f},
+                                      kQuantizedTolerance)));
+}
+
+TEST(ElementWise, LogInt16) {
+  const float input_min = -13.2f;
+  const float input_max = 13.2f;
+  const float output_min = -2.5802f;
+  const float output_max = 2.5802f;
+
+  const float kQuantizedTolerance =
+      GetLUTTolerance<int16_t>(input_min, input_max, output_min, output_max);
+
+  ElementWiseOpQuantizedModel m(
+      BuiltinOperator_LOG,
+      {TensorType_INT16, {1, 2, 2, 2}, input_min, input_max},
+      {TensorType_INT16, {}, output_min, output_max});
+  m.QuantizeAndPopulate<int16_t>(
+      m.input(), {0.1f, 0.5f, 1.0f, 1.15f, 2.3f, 5.01f, 11.0f, 13.2f});
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(
+      m.ExtractDequantVector<int16_t>(m.output()),
+      ElementsAreArray(ArrayFloatNear({-2.3026f, -0.6931f, 0.0f, 0.1398f,
+                                       0.8329f, 1.6114, 2.3979f, 2.5802f},
+                                      kQuantizedTolerance)));
+}
+
 TEST(ElementWise, Abs) {
   ElementWiseOpFloatModel m(BuiltinOperator_ABS, {1, 2, 4, 1});
   m.PopulateTensor<float>(m.input(), {
@@ -156,19 +237,34 @@ TEST(ElementWise, Abs) {
                                          3.f, -2.f, 10.f, 1.f,  //
                                      });
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.ExtractVector<float>(m.output()), ElementsAreArray({
-                                                      0.f, 6.2f, 2.f, 4.f,  //
-                                                      3.f, 2.f, 10.f, 1.f,  //
-                                                  }));
+  EXPECT_THAT(m.ExtractVector<float>(m.output()),
+              Pointwise(FloatingPointEq(), {
+                                               0.f, 6.2f, 2.f, 4.f,  //
+                                               3.f, 2.f, 10.f, 1.f,  //
+                                           }));
+}
+
+TEST(ElementWise, AbsInt32) {
+  ElementWiseOpIntModel m(BuiltinOperator_ABS, {1, 2, 4, 1});
+  m.PopulateTensor<int32_t>(m.input(), {
+                                           0, -6, 2, 4,   //
+                                           3, -2, 10, 1,  //
+                                       });
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(m.ExtractVector<int32_t>(m.output()), ElementsAreArray({
+                                                        0, 6, 2, 4,   //
+                                                        3, 2, 10, 1,  //
+                                                    }));
 }
 
 TEST(ElementWise, AbsInt8) {
-  std::vector<float> data = {15., 46., 78., -142., -1., -17., -49., 113.};
-  std::vector<float> abs_data(data.size());
-  for (int i = 0; i < abs_data.size(); i++) {
-    abs_data[i] = std::abs(data[i]);
+  const std::vector<float> input_data = {15., 46.,  78.,  -142.,
+                                         -1., -17., -49., 113.};
+  std::vector<float> expected_output(input_data.size());
+  for (int i = 0; i < expected_output.size(); i++) {
+    expected_output[i] = std::abs(input_data[i]);
   }
-  const auto minmax = std::minmax_element(data.begin(), data.end());
+  const auto minmax = std::minmax_element(input_data.begin(), input_data.end());
   const float abs_max = std::max(std::abs(*minmax.first), *minmax.second);
   const float kInputScale = (*minmax.second - *minmax.first) / 255.0;
   const float kOutputScale = abs_max / 255.0;
@@ -186,19 +282,20 @@ TEST(ElementWise, AbsInt8) {
        {kInputScale},
        {input_zero_point}},
       {TensorType_INT8, {1, 8}, 0, abs_max, kOutputScale, output_zero_point});
-  m.AsymmetricQuantizeAndPopulate<int8_t>(m.input(), data);
+  m.AsymmetricQuantizeAndPopulate<int8_t>(m.input(), input_data);
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
   EXPECT_THAT(m.ExtractDequantVector<int8_t>(m.output()),
-              ElementsAreArray(ArrayFloatNear(abs_data, kInputScale)));
+              ElementsAreArray(ArrayFloatNear(expected_output, kInputScale)));
 }
 
 TEST(ElementWise, AbsSameScaleInt8) {
-  std::vector<float> data = {15., 46., 78., -142., -1., -17., -49., 113.};
-  std::vector<float> abs_data(data.size());
-  for (int i = 0; i < abs_data.size(); i++) {
-    abs_data[i] = std::abs(data[i]);
+  const std::vector<float> input_data = {15., 46.,  78.,  -142.,
+                                         -1., -17., -49., 113.};
+  std::vector<float> expected_output(input_data.size());
+  for (int i = 0; i < expected_output.size(); i++) {
+    expected_output[i] = std::abs(input_data[i]);
   }
-  const auto minmax = std::minmax_element(data.begin(), data.end());
+  const auto minmax = std::minmax_element(input_data.begin(), input_data.end());
   const float abs_max = std::max(std::abs(*minmax.first), *minmax.second);
   const float kInputScale = (*minmax.second - *minmax.first) / 255.0;
   const int input_zero_point = 127 - *minmax.second;
@@ -214,26 +311,28 @@ TEST(ElementWise, AbsSameScaleInt8) {
        {kInputScale},
        {input_zero_point}},
       {TensorType_INT8, {1, 8}, 0, abs_max, kInputScale, input_zero_point});
-  m.AsymmetricQuantizeAndPopulate<int8_t>(m.input(), data);
+  m.AsymmetricQuantizeAndPopulate<int8_t>(m.input(), input_data);
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
   EXPECT_THAT(m.ExtractDequantVector<int8_t>(m.output()),
-              ElementsAreArray(ArrayFloatNear(abs_data, kInputScale)));
+              ElementsAreArray(ArrayFloatNear(expected_output, kInputScale)));
 }
 
 TEST(ElementWise, AbsInt16) {
   const float kQuantizedTolerance = GetQuantizationStep<int16_t>(-150, 150);
-  std::vector<float> data = {15., 46., 78., -142., -1., -17., -49., 113.};
-  std::vector<float> abs_data(data.size());
-  for (int i = 0; i < abs_data.size(); i++) {
-    abs_data[i] = std::abs(data[i]);
+  const std::vector<float> input_data = {15., 46.,  78.,  -142.,
+                                         -1., -17., -49., 113.};
+  std::vector<float> expected_output(input_data.size());
+  for (int i = 0; i < expected_output.size(); i++) {
+    expected_output[i] = std::abs(input_data[i]);
   }
   ElementWiseOpQuantizedModel m(BuiltinOperator_ABS,
                                 {TensorType_INT16, {1, 8}, -142, 142},
                                 {TensorType_INT16, {1, 8}, -150, 150});
-  m.QuantizeAndPopulate<int16_t>(m.input(), data);
+  m.QuantizeAndPopulate<int16_t>(m.input(), input_data);
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.ExtractDequantVector<int16_t>(m.output()),
-              ElementsAreArray(ArrayFloatNear(abs_data, kQuantizedTolerance)));
+  EXPECT_THAT(
+      m.ExtractDequantVector<int16_t>(m.output()),
+      ElementsAreArray(ArrayFloatNear(expected_output, kQuantizedTolerance)));
 }
 
 TEST(ElementWise, Sqrt) {
@@ -243,6 +342,91 @@ TEST(ElementWise, Sqrt) {
   EXPECT_THAT(m.ExtractVector<float>(m.output()),
               ElementsAreArray(ArrayFloatNear({0, 1, 1.41421, 2})));
   EXPECT_THAT(m.GetTensorShape(m.output()), ElementsAreArray({1, 1, 4, 1}));
+}
+
+TEST(ElementWise, SqrtInt8) {
+  const std::vector<float> input_data = {0, 1, 2, 9, 16, 25, 1.44, 0.5};
+  std::vector<float> expected_output(input_data.size());
+  for (int i = 0; i < expected_output.size(); i++) {
+    expected_output[i] = std::sqrt(input_data[i]);
+  }
+  const std::vector<int> shape = {1, 8};
+  float kInputScale = 25.0 / 255.0;
+  float kOutputScale = 5.0 / 255.0;
+  int32_t zero_point = -128;
+  ElementWiseOpQuantizedModel m(
+      BuiltinOperator_SQRT,
+      /*input_tensor_data=*/
+      {/*type=*/TensorType_INT8,
+       /*shape=*/shape,
+       /*min=*/0,
+       /*max=*/25.0,
+       /*scale=*/kInputScale,
+       /*zero_point=*/zero_point,
+       /*per_channel_quantization=*/true,
+       /*per_channel_quantization_scales=*/{kInputScale},
+       /*per_channel_quantization_offsets=*/{zero_point}},
+      /*output_tensor_data=*/
+      {/*type=*/TensorType_INT8,
+       /*shape=*/shape,
+       /*min=*/0,
+       /*max=*/5.0,
+       /*scale=*/kOutputScale,
+       /*zero_point=*/zero_point,
+       /*per_channel_quantization=*/true,
+       /*per_channel_quantization_scales=*/{kOutputScale},
+       /*per_channel_quantization_offsets=*/{zero_point}});
+  m.QuantizeAndPopulate<int8_t>(m.input(), input_data);
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(m.ExtractDequantVector<int8_t>(m.output()),
+              ElementsAreArray(ArrayFloatNear(expected_output, kInputScale)));
+}
+
+TEST(ElementWise, SqrtNegativeInt8) {
+  const std::vector<float> input_data = {-1.0};
+  float kInputScale = 1.0 / 255.0;
+  float kOutputScale = 1.0 / 255.0;
+  int32_t zero_point = 0;
+  ElementWiseOpQuantizedModel m(BuiltinOperator_SQRT,
+                                {TensorType_INT8,
+                                 {1, 1},
+                                 0,
+                                 1.0,
+                                 kInputScale,
+                                 zero_point,
+                                 true,
+                                 {kInputScale},
+                                 {zero_point}},
+                                {TensorType_INT8,
+                                 {1, 1},
+                                 0,
+                                 1.0,
+                                 kOutputScale,
+                                 zero_point,
+                                 true,
+                                 {kOutputScale},
+                                 {zero_point}});
+  m.QuantizeAndPopulate<int8_t>(m.input(), input_data);
+  EXPECT_EQ(m.Invoke(), kTfLiteError);
+}
+
+TEST(ElementWise, SqrtInt16) {
+  const std::vector<float> input_data = {0, 1, 2, 9, 16, 25, 1.44, 0.5};
+  std::vector<float> expected_output(input_data.size());
+  for (int i = 0; i < expected_output.size(); i++) {
+    expected_output[i] = std::sqrt(input_data[i]);
+  }
+
+  const float kQuantizedTolerance = GetQuantizationStep<int16_t>(-25, 25);
+
+  ElementWiseOpQuantizedModel m(BuiltinOperator_SQRT,
+                                {TensorType_INT16, {1, 8}, -25, 25},
+                                {TensorType_INT16, {1, 8}, -5, 5});
+  m.QuantizeAndPopulate<int16_t>(m.input(), input_data);
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(
+      m.ExtractDequantVector<int16_t>(m.output()),
+      ElementsAreArray(ArrayFloatNear(expected_output, kQuantizedTolerance)));
 }
 
 TEST(ElementWise, Rsqrt) {
@@ -255,10 +439,11 @@ TEST(ElementWise, Rsqrt) {
 }
 
 TEST(ElementWise, RsqrtInt8) {
-  std::vector<float> data = {15., 46., 78., 142., 1., 17., 49., 113.};
-  std::vector<float> rsqrt_data(data.size());
-  for (int i = 0; i < rsqrt_data.size(); i++) {
-    rsqrt_data[i] = 1.f / std::sqrt(data[i]);
+  const std::vector<float> input_data = {15., 46., 78., 142.,
+                                         1.,  17., 49., 113.};
+  std::vector<float> expected_output(input_data.size());
+  for (int i = 0; i < expected_output.size(); i++) {
+    expected_output[i] = 1.f / std::sqrt(input_data[i]);
   }
   float kInputScale = 142.0 / 255.0;
   float kOutputScale = 1.0 / 255.0;
@@ -282,17 +467,18 @@ TEST(ElementWise, RsqrtInt8) {
                                  true,
                                  {kOutputScale},
                                  {zero_point}});
-  m.QuantizeAndPopulate<int8_t>(m.input(), data);
+  m.QuantizeAndPopulate<int8_t>(m.input(), input_data);
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
   EXPECT_THAT(m.ExtractDequantVector<int8_t>(m.output()),
-              ElementsAreArray(ArrayFloatNear(rsqrt_data, kInputScale)));
+              ElementsAreArray(ArrayFloatNear(expected_output, kInputScale)));
 }
 
 TEST(ElementWise, RsqrtCloseTo0Int8) {
-  std::vector<float> data = {15., 46., 78., 142., 0.1, 1., 49., 113.};
-  std::vector<float> rsqrt_data(data.size());
-  for (int i = 0; i < rsqrt_data.size(); i++) {
-    rsqrt_data[i] = 1.f / std::sqrt(data[i]);
+  const std::vector<float> input_data = {15., 46., 78., 142.,
+                                         0.1, 1.,  49., 113.};
+  std::vector<float> expected_output(input_data.size());
+  for (int i = 0; i < expected_output.size(); i++) {
+    expected_output[i] = 1.f / std::sqrt(input_data[i]);
   }
   float kInputScale = 142.0 / 255.0;
   float kOutputScale = 3.16 / 255.0;
@@ -316,18 +502,15 @@ TEST(ElementWise, RsqrtCloseTo0Int8) {
                                  true,
                                  {kOutputScale},
                                  {zero_point}});
-  m.QuantizeAndPopulate<int8_t>(m.input(), data);
+  m.QuantizeAndPopulate<int8_t>(m.input(), input_data);
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
   EXPECT_THAT(m.ExtractDequantVector<int8_t>(m.output()),
-              ElementsAreArray(ArrayFloatNear(rsqrt_data, kInputScale)));
+              ElementsAreArray(ArrayFloatNear(expected_output, kInputScale)));
 }
 
-TEST(ElementWise, RsqrtNanInt8) {
-  std::vector<float> data = {15., 46., 78., 142., 1., 17., -49., 113.};
-  std::vector<float> rsqrt_data(data.size());
-  for (int i = 0; i < rsqrt_data.size(); i++) {
-    rsqrt_data[i] = 1.f / std::sqrt(data[i]);
-  }
+TEST(ElementWise, RsqrtNegativeInt8) {
+  const std::vector<float> input_data = {15., 46., 78.,  142.,
+                                         1.,  17., -49., 113.};
   float kInputScale = 142.0 / 127.0;
   float kOutputScale = 1.0 / 255.0;
   int32_t input_zero_point = 0;
@@ -351,8 +534,43 @@ TEST(ElementWise, RsqrtNanInt8) {
                                  true,
                                  {kOutputScale},
                                  {output_zero_point}});
-  m.QuantizeAndPopulate<int8_t>(m.input(), data);
+  m.QuantizeAndPopulate<int8_t>(m.input(), input_data);
   EXPECT_THAT(m.Invoke(), kTfLiteError);
+}
+
+TEST(ElementWise, RsqrtInt16) {
+  const std::vector<float> input_data = {1., 0.1, 4., 9.};
+  std::vector<float> expected_output(input_data.size());
+  for (int i = 0; i < expected_output.size(); i++) {
+    expected_output[i] = 1.f / std::sqrt(input_data[i]);
+  }
+
+  const float input_min = -10.;
+  const float input_max = 10.;
+
+  const float output_min = -4.;
+  const float output_max = 4.;
+
+  const float kQuantizedTolerance =
+      GetLUTTolerance<int16_t>(input_min, input_max, output_min, output_max);
+
+  ElementWiseOpQuantizedModel m(
+      BuiltinOperator_RSQRT,
+      {TensorType_INT16, {1, 1, 4, 1}, input_min, input_max},
+      {TensorType_INT16, {1, 1, 4, 1}, output_min, output_max});
+  m.QuantizeAndPopulate<int16_t>(m.input(), input_data);
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(
+      m.ExtractDequantVector<int16_t>(m.output()),
+      ElementsAreArray(ArrayFloatNear(expected_output, kQuantizedTolerance)));
+}
+
+TEST(ElementWise, RsqrtNegativeInt16) {
+  ElementWiseOpQuantizedModel m(BuiltinOperator_RSQRT,
+                                {TensorType_INT16, {1, 1, 4, 1}, -10, 10},
+                                {TensorType_INT16, {1, 1, 4, 1}, -10, 10});
+  m.QuantizeAndPopulate<int16_t>(m.input(), {-1, 0, -4, -9});
+  ASSERT_EQ(m.Invoke(), kTfLiteError);
 }
 
 TEST(ElementWise, Square) {

@@ -41,21 +41,21 @@ class ShardDatasetParams : public DatasetParams {
     return CreateTensors<int64_t>(TensorShape({}), {{num_shards_}, {index_}});
   }
 
-  Status GetInputNames(std::vector<string>* input_names) const override {
+  absl::Status GetInputNames(std::vector<string>* input_names) const override {
     input_names->clear();
     input_names->emplace_back(ShardDatasetOp::kInputDataset);
     input_names->emplace_back(ShardDatasetOp::kNumShards);
     input_names->emplace_back(ShardDatasetOp::kIndex);
-    return OkStatus();
+    return absl::OkStatus();
   }
 
-  Status GetAttributes(AttributeVector* attr_vector) const override {
+  absl::Status GetAttributes(AttributeVector* attr_vector) const override {
     attr_vector->clear();
     attr_vector->emplace_back("require_non_empty", require_non_empty_);
     attr_vector->emplace_back("output_types", output_dtypes_);
     attr_vector->emplace_back("output_shapes", output_shapes_);
     attr_vector->emplace_back("metadata", "");
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   string dataset_type() const override { return ShardDatasetOp::kDatasetType; }
@@ -324,7 +324,7 @@ TEST_F(ShardDatasetOpTest, NoElemForEachShard) {
   EXPECT_EQ(
       iterator_->GetNext(iterator_ctx_.get(), &out_tensors, &end_of_sequence)
           .code(),
-      tensorflow::error::INVALID_ARGUMENT);
+      absl::StatusCode::kInvalidArgument);
 }
 
 TEST_F(ShardDatasetOpTest, InvalidArguments) {
@@ -333,7 +333,7 @@ TEST_F(ShardDatasetOpTest, InvalidArguments) {
       InvalidShardDatasetParams3(), InvalidShardDatasetParams4()};
   for (const auto& dataset_params : invalid_dataset_params) {
     EXPECT_EQ(Initialize(dataset_params).code(),
-              tensorflow::error::INVALID_ARGUMENT);
+              absl::StatusCode::kInvalidArgument);
   }
 }
 

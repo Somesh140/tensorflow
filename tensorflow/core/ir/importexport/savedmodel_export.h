@@ -17,9 +17,9 @@ limitations under the License.
 #define TENSORFLOW_CORE_IR_IMPORTEXPORT_SAVEDMODEL_EXPORT_H_
 
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "tensorflow/core/framework/graph_debug_info.pb.h"
 #include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/status.h"
-#include "tensorflow/core/protobuf/graph_debug_info.pb.h"
 #include "tensorflow/core/protobuf/saved_model.pb.h"
 
 namespace mlir {
@@ -29,7 +29,7 @@ namespace tfg {
 // The module must contain at most a single Graph operation and zero or more
 // TFFunc operations. `original_saved_model` is used as only a GraphDef portion
 // of a saved model represented in the MLIR module.
-tensorflow::Status ExportMlirToSavedModel(
+absl::Status ExportMlirToSavedModel(
     mlir::ModuleOp module, const tensorflow::SavedModel &original_saved_model,
     tensorflow::SavedModel *output_saved_model);
 

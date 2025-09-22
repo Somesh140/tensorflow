@@ -15,25 +15,20 @@ limitations under the License.
 
 #include "tensorflow/dtensor/mlir/expansions/qr_spmd_expander.h"
 
-#include <algorithm>
-
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/FormatVariadic.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
-#include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
+#include "mlir/IR/Types.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
-#include "tensorflow/core/platform/errors.h"
 #include "tensorflow/dtensor/cc/dstatus.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/collectives.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
-#include "tensorflow/dtensor/mlir/op_utils.h"
 #include "tensorflow/dtensor/mlir/shape_utils.h"
-#include "tensorflow/dtensor/mlir/spmd_expander_common.h"
-#include "tensorflow/dtensor/mlir/value_utils.h"
 #include "tensorflow/dtensor/proto/layout.pb.h"
 
 namespace tensorflow {
@@ -47,8 +42,9 @@ StatusOr<mlir::Operation*> QRSPMDExpander::ExpandOp(mlir::Operation* op) {
 
   // Relayout all layouts to the first output layout with the last two
   // dimensions replicated. We can do more optimization but this is fine
-  Layout new_layout =
-      output_layouts[0].GetLayoutWithReducedDims({-1, -2}, /*keep_dims=*/true);
+  TF_ASSIGN_OR_RETURN(
+      Layout new_layout,
+      output_layouts[0].GetLayoutWithReducedDims({-1, -2}, /*keep_dims=*/true));
 
   TF_ASSIGN_OR_RETURN(
       const auto new_operand,
@@ -77,8 +73,8 @@ StatusOr<mlir::Operation*> QRSPMDExpander::ExpandOp(mlir::Operation* op) {
     builder.setInsertionPointAfterValue(generated_outputs[0]);
 
   // Tie the two outputs together with an identity op
-  auto identity_op = builder.create<mlir::TF::IdentityNOp>(
-      op->getLoc(), generated_types, generated_outputs);
+  auto identity_op = mlir::TF::IdentityNOp::create(
+      builder, op->getLoc(), generated_types, generated_outputs);
   newly_created_ops.insert(identity_op);
   for (int i = 0; i < output_layouts.size(); i++) {
     op->getOpResult(i).replaceAllUsesExcept(identity_op.getResult(i),
@@ -96,8 +92,9 @@ StatusOr<llvm::DenseMap<int, Layout>> QRSPMDExpander::ComputeLayoutForward(
 
   // Set the output layouts as the copy of the input layouts with the last 2
   // dimensions replicated.
-  Layout output_layout = input_layouts.lookup(0).GetLayoutWithReducedDims(
-      {-1, -2}, /*keep_dims=*/true);
+  TF_ASSIGN_OR_RETURN(Layout output_layout,
+                      input_layouts.lookup(0).GetLayoutWithReducedDims(
+                          {-1, -2}, /*keep_dims=*/true));
   return llvm::DenseMap<int, Layout>({{0, output_layout}, {1, output_layout}});
 }
 
@@ -111,8 +108,10 @@ StatusOr<llvm::DenseMap<int, Layout>> QRSPMDExpander::ComputeLayoutBackward(
   Layout layout = output_layouts.find(0) != output_layouts.end()
                       ? output_layouts.lookup(0)
                       : output_layouts.lookup(1);
-  return llvm::DenseMap<int, Layout>(
-      {{0, layout.GetLayoutWithReducedDims({-1, -2}, /*keep_dims=*/true)}});
+  TF_ASSIGN_OR_RETURN(
+      Layout layout_reduced_dims,
+      layout.GetLayoutWithReducedDims({-1, -2}, /*keep_dims=*/true));
+  return llvm::DenseMap<int, Layout>({{0, layout_reduced_dims}});
 }
 
 }  // namespace dtensor

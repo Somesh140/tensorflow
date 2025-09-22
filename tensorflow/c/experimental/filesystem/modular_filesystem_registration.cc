@@ -14,11 +14,22 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/c/experimental/filesystem/modular_filesystem_registration.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <memory>
+#include <utility>
+
+#include "absl/log/log.h"
+#include "tensorflow/c/experimental/filesystem/filesystem_interface.h"
 #include "tensorflow/c/experimental/filesystem/modular_filesystem.h"
+#include "tensorflow/c/tf_status.h"
 #include "tensorflow/c/tf_status_internal.h"
+#include "xla/tsl/platform/errors.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/errors.h"
-#include "tensorflow/core/util/ptr_util.h"
+#include "tensorflow/core/platform/status.h"
+#include "tensorflow/core/platform/strcat.h"
+#include "tensorflow/core/platform/stringpiece.h"
 
 namespace tensorflow {
 
@@ -224,7 +235,7 @@ static std::unique_ptr<const T> CopyToCore(const T* plugin_ops,
   if (plugin_ops == nullptr) return nullptr;
 
   size_t copy_size = std::min(plugin_size, sizeof(T));
-  auto core_ops = tensorflow::MakeUnique<T>();
+  auto core_ops = std::make_unique<T>();
   memset(core_ops.get(), 0, sizeof(T));
   memcpy(core_ops.get(), plugin_ops, copy_size);
   return core_ops;
@@ -250,7 +261,7 @@ static Status RegisterFileSystem(const TF_FilesystemPluginInfo* info,
           info->ops[index].read_only_memory_region_ops_size);
 
   // Step 2: Initialize the opaque filesystem structure
-  auto filesystem = tensorflow::MakeUnique<TF_Filesystem>();
+  auto filesystem = std::make_unique<TF_Filesystem>();
   TF_Status* c_status = TF_NewStatus();
   Status status = OkStatus();
   core_filesystem_ops->init(filesystem.get(), c_status);
@@ -261,7 +272,7 @@ static Status RegisterFileSystem(const TF_FilesystemPluginInfo* info,
   // Step 3: Actual registration
   return Env::Default()->RegisterFileSystem(
       info->ops[index].scheme,
-      tensorflow::MakeUnique<tensorflow::ModularFileSystem>(
+      std::make_unique<tensorflow::ModularFileSystem>(
           std::move(filesystem), std::move(core_filesystem_ops),
           std::move(core_random_access_file_ops),
           std::move(core_writable_file_ops),

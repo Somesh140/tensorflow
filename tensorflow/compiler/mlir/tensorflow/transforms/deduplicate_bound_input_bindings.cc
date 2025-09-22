@@ -13,7 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <vector>
+#include <memory>
+#include <utility>
 
 #include "llvm/ADT/DenseMap.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
@@ -22,14 +23,16 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_saved_model.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/savedmodel_passes_detail.h"
 
 namespace mlir {
 namespace tf_saved_model {
 namespace {
 
+#define GEN_PASS_DEF_DEDUPBOUNDINPUTBINDINGPASS
+#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_savedmodel_passes.h.inc"
+
 class DedupBoundInputBindingPass
-    : public DedupBoundInputBindingPassBase<DedupBoundInputBindingPass> {
+    : public impl::DedupBoundInputBindingPassBase<DedupBoundInputBindingPass> {
   void runOnOperation() final;
 };
 
@@ -49,7 +52,9 @@ void DedupBoundInputBindingPass::runOnOperation() {
     duplicate_arg.replaceAllUsesWith(original_arg);
     arg_indices_to_erase.set(i);
   }
-  func.eraseArguments(arg_indices_to_erase);
+  if (failed(func.eraseArguments(arg_indices_to_erase))) {
+    return signalPassFailure();
+  }
 }
 
 }  // namespace

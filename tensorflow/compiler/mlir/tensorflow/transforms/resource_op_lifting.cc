@@ -15,8 +15,10 @@ limitations under the License.
 
 // This pass lifts resource variable operations outside of device computation.
 
-#include <cstddef>
+#include <cassert>
 #include <cstdint>
+#include <memory>
+#include <utility>
 
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
@@ -30,11 +32,11 @@ limitations under the License.
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Block.h"  // from @llvm-project
-#include "mlir/IR/BlockAndValueMapping.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/Diagnostics.h"  // from @llvm-project
+#include "mlir/IR/IRMapping.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/Region.h"  // from @llvm-project
 #include "mlir/IR/SymbolTable.h"  // from @llvm-project
@@ -53,7 +55,6 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/resource_op_lifting_cleanup.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_device_passes_detail.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/convert_tensor.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/convert_type.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/mangling_util.h"
@@ -65,21 +66,24 @@ namespace {
 
 constexpr char kDeviceAttr[] = "device";
 
+#define GEN_PASS_DEF_RESOURCEOPLIFTINGPASS
+#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_device_passes.h.inc"
+
 // Lift resource operations out of device computation.
 struct ResourceOpLiftingPass
-    : public TFDevice::ResourceOpLiftingPassBase<ResourceOpLiftingPass> {
+    : public impl::ResourceOpLiftingPassBase<ResourceOpLiftingPass> {
   void runOnOperation() override;
 };
 
 bool IsResource(Value value) {
-  return getElementTypeOrSelf(value.getType()).isa<TF::ResourceType>();
+  return mlir::isa<TF::ResourceType>(getElementTypeOrSelf(value.getType()));
 }
 
 // Get the type of the data contained in a resource. Returns null if there is
 // no single type in the resource.
 Type GetResourceSubtype(Value value) {
   auto resource_type =
-      getElementTypeOrSelf(value.getType()).dyn_cast<TF::ResourceType>();
+      mlir::dyn_cast<TF::ResourceType>(getElementTypeOrSelf(value.getType()));
   auto subtypes = resource_type.getSubtypes();
   if (subtypes.size() == 1) return subtypes[0];
   return nullptr;
@@ -95,12 +99,12 @@ void SetAllVarIsInitializedToTrue(Block* block) {
        llvm::make_early_inc_range(block->getOps<TF::VarIsInitializedOp>())) {
     builder.setInsertionPoint(op);
     if (!const_true)
-      const_true = builder.create<TF::ConstOp>(
-          op.getLoc(),
+      const_true = TF::ConstOp::create(
+          builder, op.getLoc(),
           DenseIntElementsAttr::get(
               RankedTensorType::get(/*shape=*/{}, builder.getI1Type()), true));
 
-    op.is_initialized().replaceAllUsesWith(const_true);
+    op.getIsInitialized().replaceAllUsesWith(const_true);
     op.erase();
   }
 }
@@ -122,23 +126,23 @@ void ForwardStoreToLoad(Block* block) {
   // nested deeper in regions.
   for (Operation& op : llvm::make_early_inc_range(*block)) {
     if (auto read_variable_op = dyn_cast<TF::ReadVariableOp>(&op)) {
-      Value resource = read_variable_op.resource();
+      Value resource = read_variable_op.getResource();
       auto last_store = resource_handle_to_last_store_op[resource];
       if (!last_store) continue;
 
       // Use stored value in last_store to replace all uses of current resource
       // load's result, then erase this resource load. Add an intermediate
       // CastOp if the shape of types doesn't exactly match.
-      Type read_type = read_variable_op.value().getType();
-      if (read_type != last_store.value().getType()) {
+      Type read_type = read_variable_op.getValue().getType();
+      if (read_type != last_store.getValue().getType()) {
         OpBuilder builder(last_store);
         builder.setInsertionPointAfter(last_store);
-        auto cast = builder.create<TF::CastOp>(
-            last_store.getLoc(), read_type, last_store.value(),
-            /*Truncate=*/builder.getBoolAttr(false));
-        read_variable_op.value().replaceAllUsesWith(cast);
+        auto cast = TF::CastOp::create(builder, last_store.getLoc(), read_type,
+                                       last_store.getValue(),
+                                       /*Truncate=*/builder.getBoolAttr(false));
+        read_variable_op.getValue().replaceAllUsesWith(cast);
       } else {
-        read_variable_op.value().replaceAllUsesWith(last_store.value());
+        read_variable_op.getValue().replaceAllUsesWith(last_store.getValue());
       }
 
       read_variable_op.erase();
@@ -146,7 +150,7 @@ void ForwardStoreToLoad(Block* block) {
     }
 
     if (auto assign_variable_op = dyn_cast<TF::AssignVariableOp>(&op)) {
-      Value resource = assign_variable_op.resource();
+      Value resource = assign_variable_op.getResource();
       auto last_store = resource_handle_to_last_store_op[resource];
       // Previous store ops to same resource can be erased.
       if (last_store) last_store.erase();
@@ -306,7 +310,7 @@ LogicalResult RegionResourceHoister::Analyze() {
       // Since all the sub-regions within this region (i.e., regions attached to
       // op's in this region) have themselves gone through lifting, all resource
       // users are expected to be operations in this region and not embedded
-      // within other sub-regions attached to op's in this region. So the check
+      // within other sub-regions attached to ops in this region. So the check
       // for whether a user is in one of the regions attached to this op is
       // straightforward.
       if (user->getParentRegion()->getParentOp() != op_) continue;
@@ -329,13 +333,13 @@ LogicalResult RegionResourceHoister::Analyze() {
 
       if (read && !info.is_read) {
         info.is_read = true;
-        info.RefineType(read.value().getType());
+        info.RefineType(read.getValue().getType());
         info.read_attrs = user->getAttrDictionary();
       }
 
       if (write) {
         info.is_written = true;
-        info.RefineType(write.value().getType());
+        info.RefineType(write.getValue().getType());
         info.write_attrs = user->getAttrDictionary();
         written_regions.set(user->getParentRegion()->getRegionNumber());
       }
@@ -378,8 +382,8 @@ void RegionResourceHoister::GenerateHoistedReads() {
     auto& info = resource_it.second;
 
     if (info.is_read) {
-      Operation* read = builder.create<TF::ReadVariableOp>(
-          op_->getLoc(), info.data_type, resource);
+      Operation* read = TF::ReadVariableOp::create(builder, op_->getLoc(),
+                                                   info.data_type, resource);
       read->setAttrs(info.read_attrs ? info.read_attrs : empty_attrs);
       read->removeAttr(kDeviceAttr);
       info.hoisted_read = read->getResult(0);
@@ -395,7 +399,7 @@ void RegionResourceHoister::ReplaceResourceLoads(Region& region,
   // ops nested deeper in regions.
   auto all_reads = region.front().getOps<TF::ReadVariableOp>();
   for (auto read_op : llvm::make_early_inc_range(all_reads)) {
-    Value resource = read_op.resource();
+    Value resource = read_op.getResource();
     if (!Contains(resource)) continue;
 
     ResourceInfo& info = resources_[resource];
@@ -433,7 +437,7 @@ void RegionResourceHoister::AppendResourceStoreValueToReturn(
     // regions should have been lifted out.
     auto assign_ops = front.getOps<TF::AssignVariableOp>();
     for (auto assign_variable_op : llvm::make_early_inc_range(assign_ops)) {
-      Value resource = assign_variable_op.resource();
+      Value resource = assign_variable_op.getResource();
       if (!IsWritten(resource)) continue;
 
       // TODO(ycao): Prevent same value from being returned multiple times.
@@ -441,7 +445,7 @@ void RegionResourceHoister::AppendResourceStoreValueToReturn(
       // of cluster. Both of these can be post-resource-op-lifting cleanup
       // passes.
       int result_index = resources_[resource].result_index;
-      new_return_operands[result_index] = assign_variable_op.value();
+      new_return_operands[result_index] = assign_variable_op.getValue();
       assign_variable_op.erase();
     }
     old_return->setOperands(new_return_operands);
@@ -462,7 +466,8 @@ void RegionResourceHoister::ReplaceOpWithNewOp() {
   // Clone this old operation but with new result types.
   Operation* new_op = Operation::create(
       op_->getLoc(), op_->getName(), new_result_types, op_->getOperands(),
-      op_->getAttrs(), op_->getSuccessors(), op_->getNumRegions());
+      op_->getAttrs(), op_->getPropertiesStorage(), op_->getSuccessors(),
+      op_->getNumRegions());
   builder.insert(new_op);
 
   // Move regions to the new op.
@@ -476,8 +481,8 @@ void RegionResourceHoister::ReplaceOpWithNewOp() {
   for (Value resource : written_resources_) {
     ResourceInfo& info = resources_[resource];
     Value value_to_write = new_op->getResult(info.result_index);
-    Operation* write = builder.create<TF::AssignVariableOp>(
-        op_->getLoc(), resource, value_to_write);
+    Operation* write = TF::AssignVariableOp::create(builder, op_->getLoc(),
+                                                    resource, value_to_write);
     write->setAttrs(info.write_attrs);
     write->removeAttr(kDeviceAttr);
   }
@@ -631,7 +636,7 @@ LogicalResult FindResourceArgUseInfo(
       if (auto assign = llvm::dyn_cast<TF::AssignVariableOp>(user)) {
         read_or_assigned = true;
         info.updated = true;
-        info.data_type = assign.value().getType();
+        info.data_type = assign.getValue().getType();
         continue;
       }
 
@@ -676,7 +681,7 @@ llvm::SmallDenseMap<int64_t, ResourceArgUseInfo> MergeArgResourceUseInfo(
 // removed). If remaining_resource_data_types is provided, it will store the
 // data types of the remaining resource arguments, where the indices are after
 // removing unused ones.
-void RemoveUnusedResourceArgumentsAndForwardedRetvals(
+LogicalResult RemoveUnusedResourceArgumentsAndForwardedRetvals(
     const llvm::SmallDenseMap<int64_t, ResourceArgUseInfo>& infos,
     func::FuncOp func_op,
     llvm::SmallVector<int64_t, 4>* old_to_new_arg_indices = nullptr,
@@ -688,7 +693,7 @@ void RemoveUnusedResourceArgumentsAndForwardedRetvals(
   int64_t skipped_retvals = 0;
   for (auto entry : llvm::enumerate(old_return_vals)) {
     auto return_val = entry.value();
-    if (auto arg = return_val.dyn_cast<BlockArgument>()) {
+    if (auto arg = mlir::dyn_cast<BlockArgument>(return_val)) {
       auto it = infos.find(arg.getArgNumber());
       if (it != infos.end() && !it->getSecond().used) {
         return_op->eraseOperand(entry.index() - skipped_retvals++);
@@ -717,10 +722,13 @@ void RemoveUnusedResourceArgumentsAndForwardedRetvals(
       }
     }
   }
-  func_op.eraseArguments(indices_to_erase);
+  if (failed(func_op.eraseArguments(indices_to_erase))) {
+    return failure();
+  }
   func_op.setType(
       FunctionType::get(func_op.getContext(), new_types,
                         llvm::to_vector<4>(return_op->getOperandTypes())));
+  return success();
 }
 
 // Lifts reads/writes of resource arguments from func_op and changes its
@@ -744,7 +752,7 @@ LogicalResult LiftArgRetResourcesForFunction(
   // with type replaced.
   llvm::SmallVector<Value, 4> skipped_args;
   for (auto& it : hoister.GetResources()) {
-    BlockArgument arg = it.first.dyn_cast<BlockArgument>();
+    BlockArgument arg = mlir::dyn_cast<BlockArgument>(it.first);
     assert(arg && "Expect resources for FuncOp to be its arguments");
     auto type_iter = resource_data_types.find(arg.getArgNumber());
     if (type_iter == resource_data_types.end()) {
@@ -766,11 +774,11 @@ LogicalResult LiftArgRetResourcesForFunction(
   // For writes, invoke the callback and then erase the write.
   auto assign_ops = func_op.front().getOps<TF::AssignVariableOp>();
   for (auto assign_variable_op : llvm::make_early_inc_range(assign_ops)) {
-    Value resource = assign_variable_op.resource();
+    Value resource = assign_variable_op.getResource();
     if (!hoister.Contains(resource)) continue;
 
-    auto arg = resource.dyn_cast<BlockArgument>();
-    handle_updated_arg_value(arg.getArgNumber(), assign_variable_op.value());
+    auto arg = mlir::dyn_cast<BlockArgument>(resource);
+    handle_updated_arg_value(arg.getArgNumber(), assign_variable_op.getValue());
     assign_variable_op.erase();
   }
 
@@ -814,13 +822,14 @@ void AddLoadsStoresOutsideControlFlowOp(
     int64_t updated_index = entry.getSecond().second;
     auto operand = caller->getOperand(index);
     builder.setInsertionPoint(caller);
-    new_operands[index] = builder.create<TF::ReadVariableOp>(
-        caller->getLoc(), ArrayRef<Type>{new_type}, ArrayRef<Value>{operand});
+    new_operands[index] = TF::ReadVariableOp::create(builder, caller->getLoc(),
+                                                     ArrayRef<Type>{new_type},
+                                                     ArrayRef<Value>{operand});
     caller->setOperand(index, new_operands[index]);
     if (updated_index < 0) continue;
     builder.setInsertionPointAfter(caller);
-    builder.create<TF::AssignVariableOp>(
-        caller->getLoc(), ArrayRef<Type>{},
+    TF::AssignVariableOp::create(
+        builder, caller->getLoc(), ArrayRef<Type>{},
         ArrayRef<Value>{operand, caller->getResult(updated_index)});
   }
 }
@@ -843,10 +852,15 @@ LogicalResult HandleWhileLoop(TF::WhileOp while_op, func::FuncOp body,
   // Remove unused resources in functions.
   llvm::SmallVector<int64_t, 4> old_to_new_indices;
   llvm::SmallDenseMap<int64_t, Type> remaining_resource_data_types;
-  RemoveUnusedResourceArgumentsAndForwardedRetvals(
-      resource_arg_uses, body, &old_to_new_indices,
-      &remaining_resource_data_types);
-  RemoveUnusedResourceArgumentsAndForwardedRetvals(resource_arg_uses, cond);
+  if (failed(RemoveUnusedResourceArgumentsAndForwardedRetvals(
+          resource_arg_uses, body, &old_to_new_indices,
+          &remaining_resource_data_types))) {
+    return failure();
+  }
+  if (failed(RemoveUnusedResourceArgumentsAndForwardedRetvals(resource_arg_uses,
+                                                              cond))) {
+    return failure();
+  }
   (void)LiftArgRetResourcesForFunction(
       body, remaining_resource_data_types,
       [&](int64_t index, Value value) { return_op->setOperand(index, value); });
@@ -860,8 +874,8 @@ LogicalResult HandleWhileLoop(TF::WhileOp while_op, func::FuncOp body,
   OpBuilder builder(while_op);
   // Now use the filtered original operands, which will be replaced by
   // AddLoadsStoresOutsideControlFlowOp().
-  auto new_while = builder.create<TF::WhileOp>(
-      while_op.getLoc(), body.getFunctionType().getResults(),
+  auto new_while = TF::WhileOp::create(
+      builder, while_op.getLoc(), body.getFunctionType().getResults(),
       FilterRange<Value, OperandRange>(while_op.getOperands(),
                                        resource_arg_uses),
       while_op->getAttrs());
@@ -911,11 +925,18 @@ LogicalResult HandleCaseOrIfOp(CaseOrIfOp op, ArrayRef<func::FuncOp> branches) {
   if (resource_arg_uses.empty()) return success();
   // Remove unused resources in functions.
   llvm::SmallDenseMap<int64_t, Type> remaining_resource_data_types;
-  RemoveUnusedResourceArgumentsAndForwardedRetvals(
-      resource_arg_uses, branches.front(), /*old_to_new_arg_indices=*/nullptr,
-      &remaining_resource_data_types);
-  for (auto func : branches.drop_front())
-    RemoveUnusedResourceArgumentsAndForwardedRetvals(resource_arg_uses, func);
+  if (failed(RemoveUnusedResourceArgumentsAndForwardedRetvals(
+          resource_arg_uses, branches.front(),
+          /*old_to_new_arg_indices=*/nullptr,
+          &remaining_resource_data_types))) {
+    return failure();
+  }
+  for (auto func : branches.drop_front()) {
+    if (failed(RemoveUnusedResourceArgumentsAndForwardedRetvals(
+            resource_arg_uses, func))) {
+      return failure();
+    }
+  }
 
   // Forward resource inputs updated in any branch to the outputs of both
   // branches. First prepare the mapping from arg to new update output.
@@ -950,7 +971,7 @@ LogicalResult HandleCaseOrIfOp(CaseOrIfOp op, ArrayRef<func::FuncOp> branches) {
     auto old_return = branch.front().getTerminator();
     OpBuilder builder(old_return);
     auto new_return =
-        builder.create<func::ReturnOp>(old_return->getLoc(), new_retvals);
+        func::ReturnOp::create(builder, old_return->getLoc(), new_retvals);
     old_return->erase();
     (void)LiftArgRetResourcesForFunction(
         branch, remaining_resource_data_types, [&](int64_t index, Value value) {
@@ -963,12 +984,12 @@ LogicalResult HandleCaseOrIfOp(CaseOrIfOp op, ArrayRef<func::FuncOp> branches) {
   // Now use the filtered original operands, which will be replaced by
   // AddLoadsStoresOutsideControlFlowOp().
   auto new_operands =
-      FilterRange<Value, OperandRange>(op.input(), resource_arg_uses);
+      FilterRange<Value, OperandRange>(op.getInput(), resource_arg_uses);
   new_operands.insert(new_operands.begin(), op.getOperand(0));
   func::FuncOp first_func = branches.front();
-  auto new_op = builder.create<CaseOrIfOp>(
-      op.getLoc(), first_func.getFunctionType().getResults(), new_operands,
-      op->getAttrs());
+  auto new_op = CaseOrIfOp::create(builder, op.getLoc(),
+                                   first_func.getFunctionType().getResults(),
+                                   new_operands, op->getAttrs());
   // Prepare for AddLoadsStoresOutsideControlFlowOp()
   llvm::SmallDenseMap<int64_t, std::pair<Type, int64_t>>
       arg_data_type_and_updated_output_index;
@@ -1015,11 +1036,11 @@ LogicalResult HandlePartitionedCallOpCallee(
   for (auto entry :
        llvm::enumerate(callee.front().getTerminator()->getOperands())) {
     auto retval = entry.value();
-    if (!getElementTypeOrSelf(retval.getType()).isa<TF::ResourceType>()) {
+    if (!mlir::isa<TF::ResourceType>(getElementTypeOrSelf(retval.getType()))) {
       result->old_to_new_output_indices.push_back(non_resource_results++);
       continue;
     }
-    auto aliasing_arg = retval.dyn_cast<BlockArgument>();
+    auto aliasing_arg = mlir::dyn_cast<BlockArgument>(retval);
     if (!aliasing_arg) {
       return callee.emitOpError("unsupported function call: ")
              << "resource return value does not alias an input.";
@@ -1050,9 +1071,11 @@ LogicalResult HandlePartitionedCallOpCallee(
 
   // Remove unused resources in functions.
   llvm::SmallDenseMap<int64_t, Type> remaining_resource_data_types;
-  RemoveUnusedResourceArgumentsAndForwardedRetvals(
-      result->use_info, callee, /*old_to_new_arg_indices=*/nullptr,
-      &remaining_resource_data_types);
+  if (failed(RemoveUnusedResourceArgumentsAndForwardedRetvals(
+          result->use_info, callee, /*old_to_new_arg_indices=*/nullptr,
+          &remaining_resource_data_types))) {
+    return failure();
+  }
   for (const auto& entry : remaining_resource_data_types) {
     result->arg_data_type_and_updated_output_index[entry.getFirst()] = {
         entry.getSecond(), -1};
@@ -1060,7 +1083,7 @@ LogicalResult HandlePartitionedCallOpCallee(
   llvm::SmallVector<int64_t, 4> retval_indices_to_preserve;
   for (auto& val : callee.front().getTerminator()->getOpOperands()) {
     // Store indices of results that are not resources.
-    if (!getElementTypeOrSelf(val.get().getType()).isa<TF::ResourceType>())
+    if (!mlir::isa<TF::ResourceType>(getElementTypeOrSelf(val.get().getType())))
       retval_indices_to_preserve.push_back(val.getOperandNumber());
   }
   int64_t num_retvals = retval_indices_to_preserve.size();
@@ -1083,8 +1106,8 @@ LogicalResult HandlePartitionedCallOpCallee(
   old_and_new_retvals.append(new_retvals.begin(), new_retvals.end());
   // Replace old return with the new ones with update values.
   OpBuilder builder(old_return);
-  auto new_return =
-      builder.create<func::ReturnOp>(old_return->getLoc(), old_and_new_retvals);
+  auto new_return = func::ReturnOp::create(builder, old_return->getLoc(),
+                                           old_and_new_retvals);
   old_return->erase();
   callee.setType(FunctionType::get(
       callee.getContext(), callee.getFunctionType().getInputs(),
@@ -1108,10 +1131,10 @@ void UpdatePartitionedCallOpWithNewCallee(
   OpBuilder builder(call_op);
   // Now use the filtered original operands, which will be replaced by
   // AddLoadsStoresOutsideControlFlowOp().
-  auto new_operands =
-      FilterRange<Value, OperandRange>(call_op.args(), lifting_info.use_info);
-  auto new_call = builder.create<CallOpType>(
-      call_op.getLoc(),
+  auto new_operands = FilterRange<Value, OperandRange>(call_op.getArgs(),
+                                                       lifting_info.use_info);
+  auto new_call = CallOpType::create(
+      builder, call_op.getLoc(),
       lifting_info.lifted_callee.getFunctionType().getResults(), new_operands,
       call_op->getAttrs());
   new_call->setAttr("f",
@@ -1257,10 +1280,18 @@ void ResourceOpLiftingPass::runOnOperation() {
   });
 
   if (walk_result.wasInterrupted()) return signalPassFailure();
+
+  // Clean up and canonicalize to remove dead local variables as some local
+  // variables might be dead after hoisting resource loads/stores.
+  if (failed(TF::CleanupAndCanonicalizeForResourceOpLifting(module)))
+    return signalPassFailure();
 }
 
+#define GEN_PASS_DEF_RESOURCEOPLIFTINGFORMAINFUNCTIONPASS
+#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_device_passes.h.inc"
+
 struct ResourceOpLiftingForMainFunctionPass
-    : public TFDevice::ResourceOpLiftingForMainFunctionPassBase<
+    : public impl::ResourceOpLiftingForMainFunctionPassBase<
           ResourceOpLiftingForMainFunctionPass> {
   void runOnOperation() override;
 };

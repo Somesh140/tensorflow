@@ -23,7 +23,6 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "absl/types/optional.h"
 #include "tensorflow/core/data/service/common.h"
 #include "tensorflow/core/data/service/journal.h"
 #include "tensorflow/core/data/service/journal.pb.h"
@@ -42,7 +41,7 @@ DispatcherState::DispatcherState(
     const experimental::DispatcherConfig& dispatcher_config)
     : worker_index_resolver_(dispatcher_config.worker_addresses()) {}
 
-Status DispatcherState::Apply(const Update& update) {
+absl::Status DispatcherState::Apply(const Update& update) {
   switch (update.update_type_case()) {
     case Update::kRegisterDataset:
       RegisterDataset(update.register_dataset());
@@ -83,23 +82,26 @@ Status DispatcherState::Apply(const Update& update) {
     case Update::kFinishTask:
       FinishTask(update.finish_task());
       break;
+    case Update::kSnapshot:
+      Snapshot(update.snapshot());
+      break;
+    case Update::kCompressionDisabledAtRuntime:
+      CompressionDisabledAtRuntime(update.compression_disabled_at_runtime());
+      break;
     case Update::UPDATE_TYPE_NOT_SET:
       return errors::Internal("Update type not set.");
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 void DispatcherState::RegisterDataset(
     const RegisterDatasetUpdate& register_dataset) {
   std::string dataset_id = register_dataset.dataset_id();
-  int64_t fingerprint = register_dataset.fingerprint();
-  auto dataset = std::make_shared<Dataset>(dataset_id, fingerprint,
-                                           register_dataset.metadata());
+  auto dataset =
+      std::make_shared<Dataset>(dataset_id, register_dataset.metadata());
   DCHECK(!datasets_by_id_.contains(dataset_id));
   datasets_by_id_[dataset_id] = dataset;
-  DCHECK(!datasets_by_fingerprint_.contains(fingerprint));
-  datasets_by_fingerprint_[fingerprint] = dataset;
   UpdateNextAvailableDatasetId();
 }
 
@@ -132,24 +134,24 @@ void DispatcherState::CreateJob(const CreateJobUpdate& create_job) {
   next_available_job_id_ = std::max(next_available_job_id_, job_id + 1);
 }
 
-Status DispatcherState::JobFromId(int64_t job_id,
-                                  std::shared_ptr<const Job>& job) const {
+absl::Status DispatcherState::JobFromId(int64_t job_id,
+                                        std::shared_ptr<const Job>& job) const {
   auto it = jobs_by_id_.find(job_id);
   if (it == jobs_by_id_.end()) {
     return errors::NotFound("Job with id ", job_id, " not found");
   }
   job = it->second;
-  return Status::OK();
+  return absl::OkStatus();
 }
 
-Status DispatcherState::JobByName(const std::string& job_name,
-                                  std::shared_ptr<const Job>& job) const {
+absl::Status DispatcherState::JobByName(const std::string& job_name,
+                                        std::shared_ptr<const Job>& job) const {
   auto it = jobs_by_name_.find(job_name);
   if (it == jobs_by_name_.end()) {
     return errors::NotFound("Job with name ", job_name, " not found");
   }
   job = it->second;
-  return Status::OK();
+  return absl::OkStatus();
 }
 
 void DispatcherState::CreateIteration(
@@ -178,7 +180,8 @@ void DispatcherState::ProduceSplit(const ProduceSplitUpdate& produce_split) {
   DCHECK(iteration->distributed_epoch_state.has_value());
   DistributedEpochState& state = iteration->distributed_epoch_state.value();
   int64_t provider_index = produce_split.split_provider_index();
-  DCHECK_EQ(produce_split.repetition(), state.repetitions[provider_index]);
+  DCHECK_GE(produce_split.repetition(), state.repetitions[provider_index]);
+  state.repetitions[provider_index] = produce_split.repetition();
   if (produce_split.finished()) {
     state.repetitions[provider_index]++;
     state.indices[provider_index] = 0;
@@ -320,34 +323,24 @@ void DispatcherState::UpdateNextAvailableDatasetId() {
   }
 }
 
-Status DispatcherState::DatasetFromId(
+absl::Status DispatcherState::DatasetFromId(
     const std::string& id, std::shared_ptr<const Dataset>& dataset) const {
   auto it = datasets_by_id_.find(id);
   if (it == datasets_by_id_.end()) {
     return errors::NotFound("Dataset id ", id, " not found");
   }
   dataset = it->second;
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status DispatcherState::DatasetFromFingerprint(
-    uint64 fingerprint, std::shared_ptr<const Dataset>& dataset) const {
-  auto it = datasets_by_fingerprint_.find(fingerprint);
-  if (it == datasets_by_fingerprint_.end()) {
-    return errors::NotFound("Dataset fingerprint ", fingerprint, " not found");
-  }
-  dataset = it->second;
-  return OkStatus();
-}
-
-Status DispatcherState::WorkerFromAddress(
+absl::Status DispatcherState::WorkerFromAddress(
     const std::string& address, std::shared_ptr<const Worker>& worker) const {
   auto it = workers_.find(address);
   if (it == workers_.end()) {
     return errors::NotFound("Worker with address ", address, " not found.");
   }
   worker = it->second;
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 std::vector<std::shared_ptr<const DispatcherState::Worker>>
@@ -370,17 +363,17 @@ DispatcherState::ListIterations() const {
   return iterations;
 }
 
-Status DispatcherState::IterationFromId(
+absl::Status DispatcherState::IterationFromId(
     int64_t id, std::shared_ptr<const Iteration>& iteration) const {
   auto it = iterations_.find(id);
   if (it == iterations_.end()) {
     return errors::NotFound("Iteration id ", id, " not found");
   }
   iteration = it->second;
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status DispatcherState::IterationByKey(
+absl::Status DispatcherState::IterationByKey(
     IterationKey iteration_key,
     std::shared_ptr<const Iteration>& iteration) const {
   auto it = iterations_by_key_.find(iteration_key);
@@ -389,7 +382,7 @@ Status DispatcherState::IterationByKey(
                             " not found");
   }
   iteration = it->second;
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 int64_t DispatcherState::NextAvailableJobId() const {
@@ -400,14 +393,14 @@ int64_t DispatcherState::NextAvailableIterationId() const {
   return next_available_iteration_id_;
 }
 
-Status DispatcherState::IterationForIterationClientId(
+absl::Status DispatcherState::IterationForIterationClientId(
     int64_t iteration_client_id, std::shared_ptr<const Iteration>& iteration) {
   iteration = iterations_for_client_ids_[iteration_client_id];
   if (!iteration) {
     return errors::NotFound("Iteration client id not found: ",
                             iteration_client_id);
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 std::vector<int64_t> DispatcherState::ListActiveClientIds() {
@@ -424,17 +417,17 @@ int64_t DispatcherState::NextAvailableIterationClientId() const {
   return next_available_iteration_client_id_;
 }
 
-Status DispatcherState::TaskFromId(int64_t id,
-                                   std::shared_ptr<const Task>& task) const {
+absl::Status DispatcherState::TaskFromId(
+    int64_t id, std::shared_ptr<const Task>& task) const {
   auto it = tasks_.find(id);
   if (it == tasks_.end()) {
     return errors::NotFound("Task ", id, " not found");
   }
   task = it->second;
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status DispatcherState::TasksForIteration(
+absl::Status DispatcherState::TasksForIteration(
     int64_t iteration_id,
     std::vector<std::shared_ptr<const Task>>& tasks) const {
   auto it = tasks_by_iteration_.find(iteration_id);
@@ -446,10 +439,10 @@ Status DispatcherState::TasksForIteration(
   for (const auto& task : it->second) {
     tasks.push_back(task);
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status DispatcherState::TasksForWorker(
+absl::Status DispatcherState::TasksForWorker(
     absl::string_view worker_address,
     std::vector<std::shared_ptr<const Task>>& tasks) const {
   tasks.clear();
@@ -463,20 +456,42 @@ Status DispatcherState::TasksForWorker(
   for (const auto& task : worker_tasks) {
     tasks.push_back(task.second);
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 int64_t DispatcherState::NextAvailableTaskId() const {
   return next_available_task_id_;
 }
 
-Status DispatcherState::ValidateWorker(absl::string_view worker_address) const {
+absl::Status DispatcherState::ValidateWorker(
+    absl::string_view worker_address) const {
   return worker_index_resolver_.ValidateWorker(worker_address);
 }
 
-StatusOr<int64_t> DispatcherState::GetWorkerIndex(
+absl::StatusOr<int64_t> DispatcherState::GetWorkerIndex(
     absl::string_view worker_address) const {
   return worker_index_resolver_.GetWorkerIndex(worker_address);
+}
+
+void DispatcherState::Snapshot(const SnapshotUpdate& snapshot) {
+  snapshot_paths_.insert(snapshot.path());
+}
+
+void DispatcherState::CompressionDisabledAtRuntime(
+    const CompressionDisabledAtRuntimeUpdate& compression_disabled_at_runtime) {
+  compression_disabled_at_runtime_.insert({
+      compression_disabled_at_runtime.dataset_id(),
+      compression_disabled_at_runtime.compression_disabled(),
+  });
+}
+
+std::optional<bool> DispatcherState::CompressionDisabledAtRuntime(
+    const std::string& dataset_id) const {
+  if (auto it = compression_disabled_at_runtime_.find(dataset_id);
+      it != compression_disabled_at_runtime_.end()) {
+    return it->second;
+  }
+  return std::nullopt;
 }
 
 }  // namespace data

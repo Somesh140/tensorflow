@@ -39,7 +39,7 @@ static std::unique_ptr<Device> NewDevice(const string& type,
   class FakeDevice : public Device {
    public:
     explicit FakeDevice(const DeviceAttributes& attr) : Device(nullptr, attr) {}
-    Status Sync() override { return OkStatus(); }
+    absl::Status Sync() override { return absl::OkStatus(); }
     Allocator* GetAllocator(AllocatorAttributes) override { return nullptr; }
   };
   DeviceAttributes attr;
@@ -75,7 +75,7 @@ class FakeCache : public TestWorkerCache {
     WorkerInterface* wi = it->second;
     GetStatusRequest req;
     GetStatusResponse resp;
-    Status status = wi->GetStatus(&req, &resp);
+    absl::Status status = wi->GetStatus(&req, &resp);
     if (!status.ok()) {
       done(status);
       return;
@@ -83,7 +83,7 @@ class FakeCache : public TestWorkerCache {
     for (const auto& it : resp.device_attributes()) {
       if (it.name() == device) {
         *locality = it.locality();
-        done(OkStatus());
+        done(absl::OkStatus());
         return;
       }
     }
@@ -98,10 +98,10 @@ class FakeNcclCommunicator : public NcclCommunicatorInterface {
 
   void Enqueue(std::shared_ptr<CollectiveContext> col_ctx,
                StatusCallback done) override {
-    done(OkStatus());
+    done(absl::OkStatus());
   }
 
-  void StartAbort(const Status& s) override {}
+  void StartAbort(const absl::Status& s) override {}
 };
 
 class DeviceResDistTest : public ::testing::Test {
@@ -116,7 +116,7 @@ class DeviceResDistTest : public ::testing::Test {
   void DefineWorkers(int num_workers, int num_devices,
                      const string& device_type, bool nccl) {
     for (int w = 0; w < num_workers; ++w) {
-      string name = strings::StrCat("/job:worker/replica:0/task:", w);
+      string name = absl::StrCat("/job:worker/replica:0/task:", w);
       DefineWorker(name, device_type, num_devices, nccl);
     }
   }
@@ -150,7 +150,6 @@ class DeviceResDistTest : public ::testing::Test {
             worker_name);
     auto worker_env = std::make_unique<WorkerEnv>();
     worker_env->env = Env::Default();
-    worker_env->local_devices = device_mgrs_[worker_name]->ListDevices();
     worker_env->device_mgr = device_mgrs_[worker_name].get();
     worker_env->collective_executor_mgr =
         std::make_unique<TestCollectiveExecutorMgr>(
@@ -165,7 +164,7 @@ class DeviceResDistTest : public ::testing::Test {
                               CollectiveType coll_type = REDUCTION_COLLECTIVE,
                               int source_rank = 0) {
     for (int wi = 0; wi < num_workers; ++wi) {
-      string task_name = strings::StrCat("/job:worker/replica:0/task:", wi);
+      string task_name = absl::StrCat("/job:worker/replica:0/task:", wi);
       for (int di = 0; di < num_devices; ++di) {
         int idx = wi * num_devices + di;
         string device_name =
@@ -204,9 +203,9 @@ class DeviceResDistTest : public ::testing::Test {
     }
     int group_size = num_workers * num_devices;
     for (int wi = 0; wi < num_workers; ++wi) {
-      string task_name = strings::StrCat("/job:worker/replica:0/task:", wi);
+      string task_name = absl::StrCat("/job:worker/replica:0/task:", wi);
       for (int di = 0; di < num_devices; ++di) {
-        string device_name = strings::StrCat(task_name, "/device:CPU:", di);
+        string device_name = absl::StrCat(task_name, "/device:CPU:", di);
         IssueRequest(task_name, device_name, group_size);
       }
     }
@@ -221,7 +220,7 @@ class DeviceResDistTest : public ::testing::Test {
     CHECK(cp_res);
     cp_res->CompleteParamsAsync(
         device->attributes(), cp, &cm_,
-        [this, device_name, group_size](const Status& s) {
+        [this, device_name, group_size](const absl::Status& s) {
           status_[device_name] = s;
           {
             mutex_lock l(mu_);
@@ -246,9 +245,9 @@ class DeviceResDistTest : public ::testing::Test {
     const int dev_count = num_workers * num_devices;
     string dev0 = "/job:worker/replica:0/task:0/device:CPU:0";
     for (int wi = 0; wi < num_workers; ++wi) {
-      string task_name = strings::StrCat("/job:worker/replica:0/task:", wi);
+      string task_name = absl::StrCat("/job:worker/replica:0/task:", wi);
       for (int di = 0; di < num_devices; ++di) {
-        string device_name = strings::StrCat(task_name, "/device:CPU:", di);
+        string device_name = absl::StrCat(task_name, "/device:CPU:", di);
         int idx = wi * num_devices + di;
         TF_ASSERT_OK(status_[device_name]);
         EXPECT_EQ(cp_[device_name]->default_rank, idx);
@@ -284,7 +283,7 @@ class DeviceResDistTest : public ::testing::Test {
                      CollectiveType coll_type = REDUCTION_COLLECTIVE,
                      bool is_source = false) {
     string worker_name =
-        strings::StrCat("/job:worker/replica:0/task:", worker_idx);
+        absl::StrCat("/job:worker/replica:0/task:", worker_idx);
     DefineWorker(worker_name, device_type, num_devices, nccl);
     for (int i = 0; i < num_devices; ++i) {
       string device_name =
@@ -313,7 +312,7 @@ class DeviceResDistTest : public ::testing::Test {
   absl::flat_hash_map<string, std::unique_ptr<Worker>> workers_;
   // Below are keyed by device names;
   absl::flat_hash_map<string, CollectiveParams*> cp_;
-  absl::flat_hash_map<string, Status> status_;
+  absl::flat_hash_map<string, absl::Status> status_;
   mutex mu_;
   int num_done_ TF_GUARDED_BY(mu_);
   condition_variable done_;
@@ -347,7 +346,7 @@ TEST_F(DeviceResDistTest, DifferentIncarnation) {
   const string task_name = "/job:worker/replica:0/task:1";
   const string device_name = absl::StrCat(task_name, "/device:CPU:0");
   IssueRequest(task_name, device_name, num_workers * num_devices);
-  EXPECT_TRUE(errors::IsFailedPrecondition(status_[device_name]));
+  EXPECT_TRUE(absl::IsFailedPrecondition(status_[device_name]));
 }
 
 TEST_F(DeviceResDistTest, BroadcastSourceRank0) {

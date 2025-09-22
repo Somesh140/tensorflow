@@ -1,5 +1,5 @@
-// RUN: tf-opt %s -tfl-prepare-quantize="post-training-quantize=true" -tfl-quantize="numeric-verify=true log-if-failed=true" | FileCheck --check-prefix=DEBUG %s
-// RUN: tf-opt %s -tfl-prepare-quantize="post-training-quantize=true" -tfl-quantize="numeric-verify=true log-if-failed=true whole-model-verify=true" | FileCheck --check-prefix=MODEL-DEBUG %s
+// RUN: litert-opt %s -tfl-prepare-quantize="post-training-quantize=true" -tfl-quantize="numeric-verify=true log-if-failed=true" | FileCheck --check-prefix=DEBUG %s
+// RUN: litert-opt %s -tfl-prepare-quantize="post-training-quantize=true" -tfl-quantize="numeric-verify=true log-if-failed=true whole-model-verify=true" | FileCheck --check-prefix=MODEL-DEBUG %s
 
 // DEBUG-LABEL: QuantizeConv2D
 func.func @QuantizeConv2D(tensor<1x224x224x3x!quant.uniform<u8:f32, 7.812500e-03:128>>) -> tensor<1x112x112x32x!quant.uniform<u8:f32, 0.023528476789885875>> {
@@ -18,7 +18,7 @@ func.func @QuantizeConv2D(tensor<1x224x224x3x!quant.uniform<u8:f32, 7.812500e-03
 // DEBUG: %[[act:.*]] = "tfl.dequantize"(%arg0) : (tensor<1x224x224x3x!quant.uniform<u8:f32, 7.812500e-03:128>>) -> tensor<1x224x224x3xf32>
 // DEBUG: %[[f_conv:.*]] = "tfl.conv_2d"(%[[act]], %[[wt]], %[[bias]])
 // DEBUG: %[[q_conv:.*]] = "tfl.conv_2d"
-// DEBUG: "tfl.NumericVerify"(%[[q_conv]], %[[f_conv]]) {log_if_failed = true, tolerance = 5.000000e+00 : f32}
+// DEBUG: "tfl.NumericVerify"(%[[q_conv]], %[[f_conv]]) <{log_if_failed = true, tolerance = 5.000000e+00 : f32}>
 // DEBUG: return %[[q_conv]] : tensor<1x112x112x32x!quant.uniform<u8:f32, 0.023528476789885875>>
 }
 
@@ -56,8 +56,8 @@ func.func @QuantizeSplit(%arg: tensor<4x!quant.uniform<u8:f32, 1.0>>, %cst: tens
 
 // DEBUG: %[[f_split:.*]]:2 = "tfl.split"
 // DEBUG: %[[q_split:.*]]:2 = "tfl.split"
-// DEBUG: "tfl.NumericVerify"(%[[q_split]]#1, %[[f_split]]#1) {log_if_failed = true, tolerance = 5.000000e+00 : f32}
-// DEBUG: "tfl.NumericVerify"(%[[q_split]]#0, %[[f_split]]#0) {log_if_failed = true, tolerance = 5.000000e+00 : f32}
+// DEBUG: "tfl.NumericVerify"(%[[q_split]]#1, %[[f_split]]#1) <{log_if_failed = true, tolerance = 5.000000e+00 : f32}>
+// DEBUG: "tfl.NumericVerify"(%[[q_split]]#0, %[[f_split]]#0) <{log_if_failed = true, tolerance = 5.000000e+00 : f32}>
 }
 
 // DEBUG-LABEL: NotQuantizePow
@@ -144,7 +144,7 @@ func.func @CheckNumericVerifyWholeModel(%arg0: tensor<1x4x4x3xf32>) -> tensor<1x
 
 // MODEL-DEBUG-LABEL: CheckNumericVerifyWholeModelNoQuantizeOps
 func.func @CheckNumericVerifyWholeModelNoQuantizeOps(%arg0: tensor<?x5x5x2xf32>) -> (tensor<?x1x1x3xf32>) {
-  %0 = "quant.stats"(%arg0) {
+  %0 = "quantfork.stats"(%arg0) {
     layerStats = dense<[0.0, 1.0]> : tensor<2xf32>
   } : (tensor<?x5x5x2xf32>) -> tensor<?x5x5x2xf32>
   %1 = "tfl.pseudo_const"() {value = dense<1.000000e+00> : tensor<3x5x5x2xf32>} : () -> tensor<3x5x5x2xf32>
@@ -154,20 +154,20 @@ func.func @CheckNumericVerifyWholeModelNoQuantizeOps(%arg0: tensor<?x5x5x2xf32>)
     fused_activation_function = "RELU", padding = "VALID",
     stride_h = 1 : i32, stride_w = 1 : i32} : (
       tensor<?x5x5x2xf32>, tensor<3x5x5x2xf32>, tensor<3xf32>) -> tensor<?x1x1x3xf32>
-  %4 = "quant.stats"(%3) {
+  %4 = "quantfork.stats"(%3) {
     layerStats = dense<[0.0, 4.0]> : tensor<2xf32>
   } : (tensor<?x1x1x3xf32>) -> tensor<?x1x1x3xf32>
-  %5 = "tfl.sqrt"(%4) : (tensor<?x1x1x3xf32>) -> tensor<?x1x1x3xf32>
-  %6 = "quant.stats"(%5) {
-    layerStats = dense<[0.0, 2.0]> : tensor<2xf32>
+  %5 = "tfl.ceil"(%4) : (tensor<?x1x1x3xf32>) -> tensor<?x1x1x3xf32>
+  %6 = "quantfork.stats"(%5) {
+    layerStats = dense<[0.0, 4.0]> : tensor<2xf32>
   } : (tensor<?x1x1x3xf32>) -> tensor<?x1x1x3xf32>
-  %7 = "tfl.sqrt"(%6) : (tensor<?x1x1x3xf32>) -> tensor<?x1x1x3xf32>
-  %8 = "quant.stats"(%7) {
-    layerStats = dense<[0.0, 1.4]> : tensor<2xf32>
+  %7 = "tfl.ceil"(%6) : (tensor<?x1x1x3xf32>) -> tensor<?x1x1x3xf32>
+  %8 = "quantfork.stats"(%7) {
+    layerStats = dense<[0.0, 4.0]> : tensor<2xf32>
   } : (tensor<?x1x1x3xf32>) -> tensor<?x1x1x3xf32>
   %9 = tfl.mul %8, %4 {fused_activation_function = "NONE"} : tensor<?x1x1x3xf32>
-  %10 = "quant.stats"(%9) {
-    layerStats = dense<[0.000000e+00, 5.6]> : tensor<2xf32>
+  %10 = "quantfork.stats"(%9) {
+    layerStats = dense<[0.000000e+0, 16.0]> : tensor<2xf32>
   } : (tensor<?x1x1x3xf32>) -> tensor<?x1x1x3xf32>
   func.return %10 : tensor<?x1x1x3xf32>
 
@@ -175,18 +175,18 @@ func.func @CheckNumericVerifyWholeModelNoQuantizeOps(%arg0: tensor<?x5x5x2xf32>)
 // MODEL-DEBUG: %[[q_conv:.*]] = "tfl.conv_2d"{{.*}}x!quant
 // MODEL-DEBUG:"tfl.NumericVerify"(%[[q_conv]], %[[f_conv]])
 // MODEL-DEBUG: %[[dq0:.*]] = "tfl.dequantize"(%[[q_conv]])
-// MODEL-DEBUG: %[[f_sqrt1:.*]] = "tfl.sqrt"(%[[f_conv]]
-// MODEL-DEBUG: %[[q_sqrt1:.*]] = "tfl.sqrt"(%[[dq0]]
-// MODEL-DEBUG: %[[q1:.*]] = "tfl.quantize"(%[[q_sqrt1]])
+// MODEL-DEBUG: %[[f_ceil1:.*]] = "tfl.ceil"(%[[f_conv]]
+// MODEL-DEBUG: %[[q_ceil1:.*]] = "tfl.ceil"(%[[dq0]]
+// MODEL-DEBUG: %[[q1:.*]] = "tfl.quantize"(%[[q_ceil1]])
 // MODEL-DEBUG: %[[dq1:.*]] = "tfl.dequantize"(%[[q1]])
-// MODEL-DEBUG: %[[f_sqrt2:.*]] = "tfl.sqrt"(%[[f_sqrt1]])
+// MODEL-DEBUG: %[[f_ceil2:.*]] = "tfl.ceil"(%[[f_ceil1]])
 // MODEL-DEBUG-NOT: debug_
 // MODEL-DEBUG-SAME: (tensor<?x1x1x3xf32>)
-// MODEL-DEBUG: %[[q_sqrt2:.*]] = "tfl.sqrt"(%[[dq1]]
+// MODEL-DEBUG: %[[q_ceil2:.*]] = "tfl.ceil"(%[[dq1]]
 // MODEL-DEBUG-NOT: debug_
 // MODEL-DEBUG-SAME: (tensor<?x1x1x3xf32>)
-// MODEL-DEBUG: %[[q2:.*]] = "tfl.quantize"(%[[q_sqrt2]])
-// MODEL-DEBUG: %[[f_mul:.*]] = tfl.mul %[[f_sqrt2]], %[[f_conv]]
+// MODEL-DEBUG: %[[q2:.*]] = "tfl.quantize"(%[[q_ceil2]])
+// MODEL-DEBUG: %[[f_mul:.*]] = tfl.mul %[[f_ceil2]], %[[f_conv]]
 // MODEL-DEBUG: %[[q_mul:.*]] = tfl.mul(%[[q2]], %[[q_conv]])
 // MODEL-DEBUG:"tfl.NumericVerify"(%[[q_mul]], %[[f_mul]])
 }

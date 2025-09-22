@@ -39,7 +39,7 @@ namespace tfprof {
 
 class PprofProfile {
  public:
-  virtual ~PprofProfile() {}
+  virtual ~PprofProfile() = default;
 
   virtual uint64 AddLocation(const CodeNode* callee,
                              const CodeNode* caller) = 0;
@@ -47,13 +47,13 @@ class PprofProfile {
   virtual void AddSample(const CodeNode* leaf,
                          std::vector<uint64>* call_ids) = 0;
 
-  virtual Status WritePprofProfile(const string& filename) = 0;
+  virtual absl::Status WritePprofProfile(const string& filename) = 0;
 };
 
 class TFCode : public TFMultiShow {
  public:
-  TFCode() {}
-  ~TFCode() override {}
+  TFCode() = default;
+  ~TFCode() override = default;
 
   // Add nodes to the code view. Called before Build()
   void AddNode(TFGraphNode* node) override;
@@ -69,7 +69,7 @@ class TFCode : public TFMultiShow {
   std::vector<CodeNode*> SearchRoot(std::vector<CodeNode*> roots,
                                     const std::vector<string>& regexes);
 
-  std::vector<CodeNode*> PrintScope(const std::vector<CodeNode*> roots,
+  std::vector<CodeNode*> PrintScope(std::vector<CodeNode*> roots,
                                     const Options& opts, int depth,
                                     int last_ident);
 

@@ -22,7 +22,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-#include "tensorflow/lite/c/c_api_types.h"
+#include "tensorflow/lite/core/c/c_api_types.h"
 #include "tensorflow/lite/delegates/flex/buffer_map_util.h"
 #include "tensorflow/lite/interpreter.h"
 #include "tensorflow/lite/string_util.h"
@@ -234,7 +234,6 @@ TEST(BufferMapTest, TfLiteOverwritesTensorFlow) {
   buffer_map.SetFromTensorFlow(0, t1);
   buffer_map.SetFromTfLite(0, t2.get());
 
-  EXPECT_FALSE(buffer_map.IsTensorFlowTensor(0));
   EXPECT_THAT(GetTensorData<int>(buffer_map.GetTensor(0)),
               ElementsAre(0, 0, 0, 3, 0, 0, 1, 2));
 }
@@ -248,18 +247,18 @@ TEST(BufferMapTest, TensorFlowOverwritesTfLite) {
   buffer_map.SetFromTfLite(0, t2.get());
   buffer_map.SetFromTensorFlow(0, t1);
 
-  EXPECT_TRUE(buffer_map.IsTensorFlowTensor(0));
   EXPECT_THAT(GetTensorData<float>(buffer_map.GetTensor(0)),
               ElementsAre(0, 0, 0, 0.123f, 0, 0));
 }
 
 TEST(BufferMapTest, TensorflowBufferReuse) {
+  const int kAllocationSize = 1000;
   TfLiteTensor tensor;
   tensor.allocation_type = kTfLiteDynamic;
   tensor.data.raw = nullptr;
-  TfLiteTensorRealloc(10, &tensor);
+  TfLiteTensorRealloc(kAllocationSize, &tensor);
   CHECK(tensor.data.raw);
-  EXPECT_EQ(tensor.bytes, 10);
+  EXPECT_EQ(tensor.bytes, kAllocationSize);
 
   TfLiteTensorBuffer* tensor_buffer_reused = new TfLiteTensorBuffer(&tensor);
   // Checks that the underlying buffer is reused.

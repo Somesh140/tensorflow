@@ -16,6 +16,10 @@ limitations under the License.
 #ifndef TENSORFLOW_COMPILER_JIT_MARK_FOR_COMPILATION_PASS_TEST_HELPER_H_
 #define TENSORFLOW_COMPILER_JIT_MARK_FOR_COMPILATION_PASS_TEST_HELPER_H_
 
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "tensorflow/compiler/jit/mark_for_compilation_pass.h"
 
 namespace tensorflow {
@@ -26,6 +30,7 @@ class MarkForCompilationPassTestHelper {
     bool disable_deadness_analysis;
     bool enable_cluster_scoping;
     bool deterministic_cluster_names;
+    std::string session_name;  // ConfigProto.Experimental.SessionMetadata.name
 
     Options()
         : enable_global_jit(true),
@@ -56,18 +61,24 @@ class MarkForCompilationPassTestHelper {
       copy.deterministic_cluster_names = true;
       return copy;
     }
+
+    Options WithSessionName(std::string name) {
+      Options copy = *this;
+      copy.session_name = std::move(name);
+      return copy;
+    }
   };
 
   // Runs the MarkForCompilation pass on `graph` after assigning all nodes in
   // `graph` to the CPU device.  To make testing easier, ignores device
   // registration and  _XlaCompile attributes.
-  static Status MarkForCompilation(std::unique_ptr<Graph>* graph,
-                                   FunctionLibraryDefinition* flib_def,
-                                   Options options = Options());
+  static absl::Status MarkForCompilation(std::unique_ptr<Graph>* graph,
+                                         FunctionLibraryDefinition* flib_def,
+                                         Options options = Options());
 
   // Like `MarkForCompilation` but creates `flib_def` from the op registry.
-  static Status MarkForCompilation(std::unique_ptr<Graph>* graph,
-                                   Options options = Options());
+  static absl::Status MarkForCompilation(std::unique_ptr<Graph>* graph,
+                                         Options options = Options());
 };
 }  // namespace tensorflow
 

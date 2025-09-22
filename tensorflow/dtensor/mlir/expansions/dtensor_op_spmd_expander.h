@@ -16,8 +16,11 @@ limitations under the License.
 #ifndef TENSORFLOW_DTENSOR_MLIR_EXPANSIONS_DTENSOR_OP_SPMD_EXPANDER_H_
 #define TENSORFLOW_DTENSOR_MLIR_EXPANSIONS_DTENSOR_OP_SPMD_EXPANDER_H_
 
+#include "llvm/ADT/DenseMap.h"
 #include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
 #include "tensorflow/dtensor/cc/dstatus.h"
+#include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/spmd_expander.h"
 
 namespace tensorflow {
@@ -26,6 +29,21 @@ namespace dtensor {
 // Converts layout of input tensor to target layout inserting split or reduction
 // ops if necessary.
 class RelayoutSPMDExpander : public SPMDExpanderBase {
+ public:
+  StatusOr<mlir::Operation*> ExpandOp(mlir::Operation* op) override;
+
+  StatusOr<llvm::DenseMap<int, Layout>> ComputeLayoutForward(
+      mlir::Operation* op,
+      const llvm::DenseMap<int, Layout>& input_layouts) override;
+
+  StatusOr<llvm::DenseMap<int, Layout>> ComputeLayoutBackward(
+      mlir::Operation* op,
+      const llvm::DenseMap<int, Layout>& output_layouts) override;
+};
+
+// Converts layout of gradient tensor to the layout of the original Relayout's
+// input tensor, using the same expansion logic as RelayoutOp.
+class RelayoutLikeSPMDExpander : public SPMDExpanderBase {
  public:
   StatusOr<mlir::Operation*> ExpandOp(mlir::Operation* op) override;
 

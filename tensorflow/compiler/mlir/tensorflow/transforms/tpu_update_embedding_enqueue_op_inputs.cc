@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <memory>
+
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Casting.h"
@@ -30,7 +32,6 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/passes_detail.h"
 
 namespace mlir {
 namespace TFTPU {
@@ -39,8 +40,11 @@ namespace {
 constexpr char kXlaOutsideCompilationAttr[] = "_xla_outside_compilation";
 constexpr char kTPUEmbeddingAttr[] = "_tpu_embedding_layer";
 
+#define GEN_PASS_DEF_TPUUPDATEEMBEDDINGENQUEUEOPINPUTSPASS
+#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_passes.h.inc"
+
 struct TPUUpdateEmbeddingEnqueueOpInputsPass
-    : public TF::TPUUpdateEmbeddingEnqueueOpInputsPassBase<
+    : public impl::TPUUpdateEmbeddingEnqueueOpInputsPassBase<
           TPUUpdateEmbeddingEnqueueOpInputsPass> {
   void runOnOperation() override;
 };

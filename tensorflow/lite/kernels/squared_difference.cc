@@ -18,7 +18,7 @@ limitations under the License.
 #include <algorithm>
 
 #include "ruy/profiler/instrumentation.h"  // from @ruy
-#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/core/c/common.h"
 #include "tensorflow/lite/kernels/internal/optimized/optimized_ops.h"
 #include "tensorflow/lite/kernels/internal/quantization_util.h"
 #include "tensorflow/lite/kernels/internal/reference/binary_function.h"
@@ -223,7 +223,6 @@ TfLiteStatus Eval(TfLiteContext* context, TfLiteNode* node) {
   TfLiteTensor* output;
   TF_LITE_ENSURE_OK(context,
                     GetOutputSafe(context, node, kOutputTensor, &output));
-
   if (output->type == kTfLiteFloat32) {
     EvalSquaredDifference<float>(context, node, data, input1, input2, output);
   } else if (output->type == kTfLiteInt32) {

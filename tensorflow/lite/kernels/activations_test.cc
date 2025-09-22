@@ -26,11 +26,12 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/memory/memory.h"
 #include "flatbuffers/flatbuffers.h"  // from @flatbuffers
 #include "tensorflow/lite/core/api/op_resolver.h"
-#include "tensorflow/lite/interpreter.h"
+#include "tensorflow/lite/core/interpreter.h"
 #include "tensorflow/lite/kernels/test_util.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/string_type.h"
@@ -184,15 +185,13 @@ class BaseActivationsOpModel : public SingleOpModel {
   int input_;
   int output_;
 };
-
+template <typename T>
 class FloatActivationsOpModel : public BaseActivationsOpModel {
  public:
   using BaseActivationsOpModel::BaseActivationsOpModel;
 
-  void SetInput(const std::vector<float>& data) {
-    PopulateTensor(input_, data);
-  }
-  std::vector<float> GetOutput() { return ExtractVector<float>(output_); }
+  void SetInput(const std::vector<T>& data) { PopulateTensor(input_, data); }
+  std::vector<T> GetOutput() { return ExtractVector<T>(output_); }
 };
 
 // Our fixed-point math function implementations have roughly 12 bits of
@@ -285,8 +284,9 @@ class SoftmaxOpTest : public SingleOpTest {
 };
 
 TEST(FloatActivationsOpTest, Elu) {
-  FloatActivationsOpModel m(BuiltinOperator_ELU,
-                            /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
+  FloatActivationsOpModel<float> m(
+      BuiltinOperator_ELU,
+      /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
   m.SetInput({
       0, -6, 2, -4,     //
       3, -2, 10, -0.1,  //
@@ -322,8 +322,9 @@ TEST(QuantizedActivationsOpTest, EluInt8) {
 }
 
 TEST(FloatActivationsOpTest, Relu) {
-  FloatActivationsOpModel m(BuiltinOperator_RELU,
-                            /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
+  FloatActivationsOpModel<float> m(
+      BuiltinOperator_RELU,
+      /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
   m.SetInput({
       0, -6, 2, 4,   //
       3, -2, 10, 1,  //
@@ -336,36 +337,41 @@ TEST(FloatActivationsOpTest, Relu) {
 }
 
 TEST(FloatActivationsOpTest, Relu0To1) {
-  FloatActivationsOpModel m(BuiltinOperator_RELU_0_TO_1,
-                            /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
+  FloatActivationsOpModel<float> m(
+      BuiltinOperator_RELU_0_TO_1,
+      /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
   m.SetInput({
       0.0, -0.6, 0.2, -0.4,  //
       0.3, -2.0, 1.1, -0.1,  //
   });
   m.Invoke();
-  EXPECT_THAT(m.GetOutput(), ElementsAreArray({
-                                 0.0, 0.0, 0.2, 0.0,  //
-                                 0.3, 0.0, 1.0, 0.0,  //
-                             }));
+  EXPECT_THAT(m.GetOutput(),
+              Pointwise(FloatingPointEq(), {
+                                               0.0, 0.0, 0.2, 0.0,  //
+                                               0.3, 0.0, 1.0, 0.0,  //
+                                           }));
 }
 
 TEST(FloatActivationsOpTest, Relu1) {
-  FloatActivationsOpModel m(BuiltinOperator_RELU_N1_TO_1,
-                            /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
+  FloatActivationsOpModel<float> m(
+      BuiltinOperator_RELU_N1_TO_1,
+      /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
   m.SetInput({
       0.0, -0.6, 0.2, -0.4,  //
       0.3, -2.0, 1.1, -0.1,  //
   });
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.GetOutput(), ElementsAreArray({
-                                 0.0, -0.6, 0.2, -0.4,  //
-                                 0.3, -1.0, 1.0, -0.1,  //
-                             }));
+  EXPECT_THAT(m.GetOutput(),
+              Pointwise(FloatingPointEq(), {
+                                               0.0, -0.6, 0.2, -0.4,  //
+                                               0.3, -1.0, 1.0, -0.1,  //
+                                           }));
 }
 
 TEST(FloatActivationsOpTest, Relu6) {
-  FloatActivationsOpModel m(BuiltinOperator_RELU6,
-                            /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
+  FloatActivationsOpModel<float> m(
+      BuiltinOperator_RELU6,
+      /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
   m.SetInput({
       0, -6, 2, 4,   //
       3, -2, 10, 1,  //
@@ -417,9 +423,10 @@ void TestFloatHardSwish(int size, std::minstd_rand* random_engine) {
   std::vector<float> float_ref_output_values;
   EvalTestReferenceHardSwish(size, float_input_values,
                              &float_ref_output_values);
-  FloatActivationsOpModel m(BuiltinOperator_HARD_SWISH,
-                            /*input=*/{TensorType_FLOAT32, {1, 1, 1, size}},
-                            /*output=*/{TensorType_FLOAT32, {1, 1, 1, size}});
+  FloatActivationsOpModel<float> m(
+      BuiltinOperator_HARD_SWISH,
+      /*input=*/{TensorType_FLOAT32, {1, 1, 1, size}},
+      /*output=*/{TensorType_FLOAT32, {1, 1, 1, size}});
   m.SetInput(float_input_values);
 
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
@@ -552,8 +559,9 @@ TEST(QuantizedActivationsOpTest, HardSwishBias) {
 }
 
 TEST_P(TanhOpTest, Tanh) {
-  FloatActivationsOpModel m(GetRegistration(), BuiltinOperator_TANH,
-                            /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
+  FloatActivationsOpModel<float> m(
+      GetRegistration(), BuiltinOperator_TANH,
+      /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
   m.SetInput({
       0, -6, 2, 4,   //
       3, -2, 10, 1,  //
@@ -563,6 +571,64 @@ TEST_P(TanhOpTest, Tanh) {
                                  0, -0.9999877, 0.9640275, 0.999329,    //
                                  0.99505475, -0.9640275, 1, 0.7615941,  //
                              })));
+}
+
+TEST_P(TanhOpTest, TanhFloat16) {
+  FloatActivationsOpModel<Eigen::half> m(
+      GetRegistration(), BuiltinOperator_TANH,
+      /*input=*/{TensorType_FLOAT16, {1, 2, 4, 1}});
+  m.SetInput({
+      Eigen::half(0),
+      Eigen::half(-6),
+      Eigen::half(2),
+      Eigen::half(4),
+      Eigen::half(3),
+      Eigen::half(-2),
+      Eigen::half(10),
+      Eigen::half(1),
+  });
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(m.GetOutput(), ElementsAreArray(ArrayFloatNear(
+                                 {
+                                     0,
+                                     -0.9999877,
+                                     0.9640275,
+                                     0.999329,
+                                     0.99505475,
+                                     -0.9640275,
+                                     1,
+                                     0.7615941,
+                                 },
+                                 1e-1)));
+}
+
+TEST_P(TanhOpTest, TanhBFloat16) {
+  FloatActivationsOpModel<Eigen::bfloat16> m(
+      GetRegistration(), BuiltinOperator_TANH,
+      /*input=*/{TensorType_BFLOAT16, {1, 2, 4, 1}});
+  m.SetInput({
+      Eigen::bfloat16(0.5),
+      Eigen::bfloat16(-3),
+      Eigen::bfloat16(1.5),
+      Eigen::bfloat16(0.75),
+      Eigen::bfloat16(-1.5),
+      Eigen::bfloat16(2.5),
+      Eigen::bfloat16(-0.75),
+      Eigen::bfloat16(0.25),
+  });
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(m.GetOutput(), ElementsAreArray(ArrayFloatNear(
+                                 {
+                                     0.462117,
+                                     -0.995054,
+                                     0.905148,
+                                     0.635148,
+                                     -0.905148,
+                                     0.986614,
+                                     -0.635148,
+                                     0.244918,
+                                 },
+                                 1e-1)));
 }
 
 TEST(QuantizedActivationsOpTest, Relu6Uint8) {
@@ -1116,18 +1182,85 @@ TEST_P(TanhOpTest, TanhInt16General) {
                   kQuantizedToleranceInt16)));
 }
 
-TEST_P(LogisticOpTest, Sigmoid) {
-  FloatActivationsOpModel m(GetRegistration(), BuiltinOperator_LOGISTIC,
-                            /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
+TEST_P(LogisticOpTest, SigmoidFloat32) {
+  FloatActivationsOpModel<float> m(
+      GetRegistration(), BuiltinOperator_LOGISTIC,
+      /*input=*/{TensorType_FLOAT32, {1, 2, 4, 1}});
   m.SetInput({
-      0, -6, 2, 4,   //
-      3, -2, 10, 1,  //
+      0,
+      -6,
+      2,
+      4,
+      3,
+      -2,
+      10,
+      1,
   });
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
   EXPECT_THAT(m.GetOutput(), ElementsAreArray(ArrayFloatNear({
-                                 0.5, 0.002473, 0.880797, 0.982014,       //
-                                 0.952574, 0.119203, 0.999955, 0.731059,  //
+                                 0.5,
+                                 0.002473,
+                                 0.880797,
+                                 0.982014,
+                                 0.952574,
+                                 0.119203,
+                                 0.999955,
+                                 0.731059,
                              })));
+}
+
+TEST_P(LogisticOpTest, SigmoidFloat16) {
+  FloatActivationsOpModel<Eigen::half> m(
+      GetRegistration(), BuiltinOperator_LOGISTIC,
+      /*input=*/{TensorType_FLOAT16, {1, 2, 4, 1}});
+  m.SetInput({
+      Eigen::half{-1.2f},
+      Eigen::half{-6.0f},
+      Eigen::half{2.0f},
+      Eigen::half{4.0f},
+      Eigen::half{3.0f},
+      Eigen::half{-2.0f},
+      Eigen::half{10.0f},
+      Eigen::half{1.0f},
+  });
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(m.GetOutput(), ElementsAreArray(ArrayFloatNear(
+                                 {
+                                     0.231475,
+                                     0.002473,
+                                     0.880797,
+                                     0.982014,
+                                     0.952574,
+                                     0.119203,
+                                     0.999955,
+                                     0.731059,
+                                 },
+                                 0.002f)));
+}
+
+TEST_P(LogisticOpTest, SigmoidBFloat16) {
+  FloatActivationsOpModel<Eigen::bfloat16> m(
+      GetRegistration(), BuiltinOperator_LOGISTIC,
+      /*input=*/{TensorType_BFLOAT16, {1, 2, 4, 1}});
+  m.SetInput({
+      Eigen::bfloat16{-1.2f}, Eigen::bfloat16{-8.0f}, Eigen::bfloat16{-5.0f},
+      Eigen::bfloat16{-3.0f},  //
+      Eigen::bfloat16{3.2f}, Eigen::bfloat16{4.0f}, Eigen::bfloat16{6.5f},
+      Eigen::bfloat16{10.0f},  //
+  });
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(m.GetOutput(), ElementsAreArray(ArrayFloatNear(
+                                 {
+                                     0.231475,
+                                     0.000335,
+                                     0.00669,
+                                     0.047426,
+                                     0.96083,
+                                     0.98201,
+                                     0.998498,
+                                     0.999955,
+                                 },
+                                 0.002f)));
 }
 
 TEST_P(LogisticOpTest, SigmoidUint8) {
@@ -1351,10 +1484,31 @@ TEST_P(LogisticOpTest, SigmoidInt16General) {
                   kQuantizedToleranceInt16)));
 }
 
+TEST_P(SoftmaxOpTest, Softmax4DInplace) {
+  FloatActivationsOpModel<float> m(GetRegistration(), 0.1f,
+                                   {TensorType_FLOAT32, {1, 2, 1, 4}},
+                                   TensorType_FLOAT32);
+  m.SetInput({
+      0, -6, 2, 4,   // depth = 0
+      3, -2, 10, 1,  // depth = 1
+  });
+  const int kInplaceInputTensorIdx = 0;
+  const int kInplaceOutputTensorIdx = 0;
+  const TfLiteTensor* input_tensor = m.GetInputTensor(kInplaceInputTensorIdx);
+  TfLiteTensor* output_tensor = m.GetOutputTensor(kInplaceOutputTensorIdx);
+  output_tensor->data.data = input_tensor->data.data;
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(m.GetOutput(), ElementsAreArray(ArrayFloatNear({
+                                 .23463, .12877, .28658, .35003,  //
+                                 .22528, .13664, .45365, .18443,  //
+                             })));
+  EXPECT_EQ(output_tensor->data.data, input_tensor->data.data);
+}
+
 TEST_P(SoftmaxOpTest, Softmax4D) {
-  FloatActivationsOpModel m(GetRegistration(), 0.1f,
-                            {TensorType_FLOAT32, {1, 2, 1, 4}},
-                            TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m(GetRegistration(), 0.1f,
+                                   {TensorType_FLOAT32, {1, 2, 1, 4}},
+                                   TensorType_FLOAT32);
   m.SetInput({
       0, -6, 2, 4,   // depth = 0
       3, -2, 10, 1,  // depth = 1
@@ -1366,9 +1520,9 @@ TEST_P(SoftmaxOpTest, Softmax4D) {
                              })));
 
   // Same input, but a different shape.
-  FloatActivationsOpModel m2(GetRegistration(), 0.1f,
-                             {TensorType_FLOAT32, {4, 1, 1, 2}},
-                             TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m2(GetRegistration(), 0.1f,
+                                    {TensorType_FLOAT32, {4, 1, 1, 2}},
+                                    TensorType_FLOAT32);
   m2.SetInput({
       0, -6,  //
       2, 4,   //
@@ -1904,9 +2058,9 @@ TEST_P(SoftmaxOpTest, Softmax4DInt8Int16) {
 }
 
 TEST_P(SoftmaxOpTest, Softmax3D) {
-  FloatActivationsOpModel m(GetRegistration(), 0.1f,
-                            {TensorType_FLOAT32, {1, 2, 4}},
-                            TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m(GetRegistration(), 0.1f,
+                                   {TensorType_FLOAT32, {1, 2, 4}},
+                                   TensorType_FLOAT32);
   m.SetInput({
       0, -6, 2, 4,   // depth = 0
       3, -2, 10, 1,  // depth = 1
@@ -1918,9 +2072,9 @@ TEST_P(SoftmaxOpTest, Softmax3D) {
                              })));
 
   // Same input, but a different shape.
-  FloatActivationsOpModel m2(GetRegistration(), 0.1f,
-                             {TensorType_FLOAT32, {4, 1, 2}},
-                             TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m2(GetRegistration(), 0.1f,
+                                    {TensorType_FLOAT32, {4, 1, 2}},
+                                    TensorType_FLOAT32);
   m2.SetInput({
       0, -6,  //
       2, 4,   //
@@ -2015,8 +2169,8 @@ TEST_P(SoftmaxOpTest, Softmax3DUint8Int16) {
 }
 
 TEST_P(SoftmaxOpTest, Softmax1D) {
-  FloatActivationsOpModel m(GetRegistration(), 0.1f, {TensorType_FLOAT32, {8}},
-                            TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m(
+      GetRegistration(), 0.1f, {TensorType_FLOAT32, {8}}, TensorType_FLOAT32);
   m.SetInput({0, -6, 2, 4, 3, -2, 10, 1});
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
   EXPECT_THAT(
@@ -2026,8 +2180,8 @@ TEST_P(SoftmaxOpTest, Softmax1D) {
 }
 
 TEST_P(SoftmaxOpTest, Softmax1DMax) {
-  FloatActivationsOpModel m(GetRegistration(), 0.1f, {TensorType_FLOAT32, {8}},
-                            TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m(
+      GetRegistration(), 0.1f, {TensorType_FLOAT32, {8}}, TensorType_FLOAT32);
   m.SetInput({std::numeric_limits<float>::max(), -6, 2, 4, 3, -2, 10, 1});
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
   EXPECT_THAT(m.GetOutput(),
@@ -2035,8 +2189,8 @@ TEST_P(SoftmaxOpTest, Softmax1DMax) {
 }
 
 TEST_P(SoftmaxOpTest, Softmax1DInf) {
-  FloatActivationsOpModel m(GetRegistration(), 0.1f, {TensorType_FLOAT32, {8}},
-                            TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m(
+      GetRegistration(), 0.1f, {TensorType_FLOAT32, {8}}, TensorType_FLOAT32);
   m.SetInput({std::numeric_limits<float>::infinity(), -6, 2, 4, 3, -2, 10, 1});
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
   auto output = m.GetOutput();
@@ -2072,8 +2226,9 @@ TEST_P(SoftmaxOpTest, Softmax1DUint8Int16) {
 }
 
 TEST_P(SoftmaxOpTest, Softmax2D) {
-  FloatActivationsOpModel m(GetRegistration(), 0.1f,
-                            {TensorType_FLOAT32, {2, 4}}, TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m(GetRegistration(), 0.1f,
+                                   {TensorType_FLOAT32, {2, 4}},
+                                   TensorType_FLOAT32);
   m.SetInput({
       0, -6, 2, 4,   //
       3, -2, 10, 1,  //
@@ -2085,8 +2240,9 @@ TEST_P(SoftmaxOpTest, Softmax2D) {
                              })));
 
   // Same input, but a different shape.
-  FloatActivationsOpModel m2(GetRegistration(), 0.1f,
-                             {TensorType_FLOAT32, {4, 2}}, TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m2(GetRegistration(), 0.1f,
+                                    {TensorType_FLOAT32, {4, 2}},
+                                    TensorType_FLOAT32);
   m2.SetInput({
       0, -6,  //
       2, 4,   //
@@ -2103,8 +2259,9 @@ TEST_P(SoftmaxOpTest, Softmax2D) {
 }
 
 TEST_P(SoftmaxOpTest, Softmax2DMultithreading) {
-  FloatActivationsOpModel m(GetRegistration(), 0.1f,
-                            {TensorType_FLOAT32, {16, 4}}, TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m(GetRegistration(), 0.1f,
+                                   {TensorType_FLOAT32, {16, 4}},
+                                   TensorType_FLOAT32);
   m.SetInput({
       0, -6, 2,  4,  //  Thread 1.
       3, -2, 10, 1,  //
@@ -2145,8 +2302,9 @@ TEST_P(SoftmaxOpTest, Softmax2DMultithreading) {
                              })));
 
   // Same input, but a different shape.
-  FloatActivationsOpModel m2(GetRegistration(), 0.1f,
-                             {TensorType_FLOAT32, {16, 2}}, TensorType_FLOAT32);
+  FloatActivationsOpModel<float> m2(GetRegistration(), 0.1f,
+                                    {TensorType_FLOAT32, {16, 2}},
+                                    TensorType_FLOAT32);
   m2.SetInput({
       0,  -6,  // Thread 1
       2,  4,   //
@@ -2276,8 +2434,9 @@ TEST_P(SoftmaxOpTest, Softmax2DUint8Int16) {
 //     print('lsm2', sess.run(lsm2))
 
 TEST_P(LogSoftmaxOpTest, LogSoftmax) {
-  FloatActivationsOpModel m(GetRegistration(), BuiltinOperator_LOG_SOFTMAX,
-                            /*input=*/{TensorType_FLOAT32, {2, 4}});
+  FloatActivationsOpModel<float> m(GetRegistration(),
+                                   BuiltinOperator_LOG_SOFTMAX,
+                                   /*input=*/{TensorType_FLOAT32, {2, 4}});
   m.SetInput({
       0, -6, 2, 4,   //
       3, -2, 10, 1,  //
@@ -2289,8 +2448,9 @@ TEST_P(LogSoftmaxOpTest, LogSoftmax) {
                              })));
 
   // Same input, but a different shape.
-  FloatActivationsOpModel m2(GetRegistration(), BuiltinOperator_LOG_SOFTMAX,
-                             /*input=*/{TensorType_FLOAT32, {4, 2}});
+  FloatActivationsOpModel<float> m2(GetRegistration(),
+                                    BuiltinOperator_LOG_SOFTMAX,
+                                    /*input=*/{TensorType_FLOAT32, {4, 2}});
   m2.SetInput({
       0, -6,  //
       2, 4,   //
@@ -2455,12 +2615,14 @@ TEST_P(PReluOpTest, PReluFloat32) {
   });
   m.SetAlpha({0.0f, 1.0f, 2.0f});
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.GetOutput(), ElementsAreArray({
-                                 0.0f, 0.0f, 0.0f,    // Row 1, Column 1
-                                 1.0f, 1.0f, 1.0f,    // Row 1, Column 2
-                                 0.0f, -1.0f, -2.0f,  // Row 2, Column 1
-                                 0.0f, -2.0f, -4.0f,  // Row 2, Column 2
-                             }));
+  EXPECT_THAT(
+      m.GetOutput(),
+      Pointwise(FloatingPointEq(), {
+                                       0.0f, 0.0f, 0.0f,    // Row 1, Column 1
+                                       1.0f, 1.0f, 1.0f,    // Row 1, Column 2
+                                       0.0f, -1.0f, -2.0f,  // Row 2, Column 1
+                                       0.0f, -2.0f, -4.0f,  // Row 2, Column 2
+                                   }));
 }
 
 TEST_P(PReluOpTest, PReluFloat32SameShapes) {
@@ -2480,12 +2642,14 @@ TEST_P(PReluOpTest, PReluFloat32SameShapes) {
       0.0f, 1.0f, 2.0f,  // Row 2, Column 2
   });
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.GetOutput(), ElementsAreArray({
-                                 0.0f, 0.0f, 0.0f,    // Row 1, Column 1
-                                 1.0f, 1.0f, 1.0f,    // Row 1, Column 2
-                                 0.0f, -1.0f, -2.0f,  // Row 2, Column 1
-                                 0.0f, -2.0f, -4.0f,  // Row 2, Column 2
-                             }));
+  EXPECT_THAT(
+      m.GetOutput(),
+      Pointwise(FloatingPointEq(), {
+                                       0.0f, 0.0f, 0.0f,    // Row 1, Column 1
+                                       1.0f, 1.0f, 1.0f,    // Row 1, Column 2
+                                       0.0f, -1.0f, -2.0f,  // Row 2, Column 1
+                                       0.0f, -2.0f, -4.0f,  // Row 2, Column 2
+                                   }));
 }
 
 TEST_P(PReluOpTest, PReluUInt8) {
@@ -2594,7 +2758,12 @@ TEST_P(PReluOpTest, PReluInt8SameShapes) {
       -1.0f, -1.0f, -1.0f,     // Row 2, Column 1
       -0.25f, -0.25f, -0.25f,  // Row 2, Column 2
   });
-  m.SetAlpha<int8_t>({0.0f, 0.5f, -0.5f});
+  m.SetAlpha<int8_t>({
+      0.0f, 0.5f, -0.5f,  // Row 1, Column 1
+      0.0f, 0.5f, -0.5f,  // Row 1, Column 2
+      0.0f, 0.5f, -0.5f,  // Row 2, Column 1
+      0.0f, 0.5f, -0.5f,  // Row 2, Column 2
+  });
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
   EXPECT_THAT(m.GetDequantizedOutput<int8_t>(),
               ElementsAreArray(ArrayFloatNear(
@@ -2611,6 +2780,75 @@ TEST_P(PReluOpTest, PReluInt8SameShapes) {
                                          0, -64, 64,  // Row 2, Column 1
                                          0, -16, 16,  // Row 2, Column 2
                                      }));
+}
+
+TEST_P(PReluOpTest, PReluInt16) {
+  const float kMin = -1;
+  const float kMaxInt8 = 127.f / 128.f;
+  const float kMaxInt16 = 32767.f / 32768.f;
+  QuantizedPReluOpModel m({TensorType_INT16, {1, 2, 2, 3}, kMin, kMaxInt16},
+                          {TensorType_INT8, {1, 1, 3}, kMin, kMaxInt8});
+  m.SetInput<int16_t>({
+      0.0f, 0.0f, 0.0f,        // Row 1, Column 1
+      0.5f, 0.5f, 0.5f,        // Row 1, Column 2
+      -1.0f, -1.0f, -1.0f,     // Row 2, Column 1
+      -0.25f, -0.25f, -0.25f,  // Row 2, Column 2
+  });
+  m.SetAlpha<int8_t>({0.0f, 0.5f, -0.5f});
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(m.GetDequantizedOutput<int16_t>(),
+              ElementsAreArray(ArrayFloatNear(
+                  {
+                      0.0f, 0.0f, 0.0f,       // Row 1, Column 1
+                      0.5f, 0.5f, 0.5f,       // Row 1, Column 2
+                      0.0f, -0.5f, 0.5f,      // Row 2, Column 1
+                      0.0f, -0.125f, 0.125f,  // Row 2, Column 2
+                  },
+                  kQuantizedToleranceInt16)));
+  EXPECT_THAT(m.GetOutput<int16_t>(),
+              ElementsAreArray({
+                  0, 0, 0,              // Row 1, Column 1
+                  16384, 16384, 16384,  // Row 1, Column 2
+                  0, -16384, 16384,     // Row 2, Column 1
+                  0, -4096, 4096,       // Row 2, Column 2
+              }));
+}
+
+TEST_P(PReluOpTest, PReluInt16SameShapes) {
+  const float kMin = -1;
+  const float kMaxInt8 = 127.f / 128.f;
+  const float kMaxInt16 = 32767.f / 32768.f;
+  QuantizedPReluOpModel m({TensorType_INT16, {1, 2, 2, 3}, kMin, kMaxInt16},
+                          {TensorType_INT8, {1, 1, 3}, kMin, kMaxInt8});
+  m.SetInput<int16_t>({
+      0.0f, 0.0f, 0.0f,        // Row 1, Column 1
+      0.5f, 0.5f, 0.5f,        // Row 1, Column 2
+      -1.0f, -1.0f, -1.0f,     // Row 2, Column 1
+      -0.25f, -0.25f, -0.25f,  // Row 2, Column 2
+  });
+  m.SetAlpha<int8_t>({
+      0.0f, 0.5f, -0.5f,  // Row 1, Column 1
+      0.0f, 0.5f, -0.5f,  // Row 1, Column 2
+      0.0f, 0.5f, -0.5f,  // Row 2, Column 1
+      0.0f, 0.5f, -0.5f,  // Row 2, Column 2
+  });
+  ASSERT_EQ(m.Invoke(), kTfLiteOk);
+  EXPECT_THAT(m.GetDequantizedOutput<int16_t>(),
+              ElementsAreArray(ArrayFloatNear(
+                  {
+                      0.0f, 0.0f, 0.0f,       // Row 1, Column 1
+                      0.5f, 0.5f, 0.5f,       // Row 1, Column 2
+                      0.0f, -0.5f, 0.5f,      // Row 2, Column 1
+                      0.0f, -0.125f, 0.125f,  // Row 2, Column 2
+                  },
+                  kQuantizedToleranceInt16)));
+  EXPECT_THAT(m.GetOutput<int16_t>(),
+              ElementsAreArray({
+                  0, 0, 0,              // Row 1, Column 1
+                  16384, 16384, 16384,  // Row 1, Column 2
+                  0, -16384, 16384,     // Row 2, Column 1
+                  0, -4096, 4096,       // Row 2, Column 2
+              }));
 }
 
 class LeakyReluOpModel : public SingleOpModel {
@@ -2640,10 +2878,11 @@ TEST(FloatActivationsOpTest, LeakyRelu) {
       1.0f, -1.0f, -2.0f,  // Row 2
   });
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.GetOutput(), ElementsAreArray({
-                                 0.0f, 1.0f, 3.0f,    // Row 1
-                                 1.0f, -0.5f, -1.0f,  // Row 2
-                             }));
+  EXPECT_THAT(m.GetOutput(),
+              Pointwise(FloatingPointEq(), {
+                                               0.0f, 1.0f, 3.0f,    // Row 1
+                                               1.0f, -0.5f, -1.0f,  // Row 2
+                                           }));
 }
 
 class GeluOpModel : public SingleOpModel {
@@ -2729,16 +2968,22 @@ TEST(FloatActivationsOpTest, Gelu) {
 
 TEST(FloatActivationsOpTest, GeluApproximate) {
   FloatGeluOpModel m({TensorType_FLOAT32, {2, 3}}, /*approximate=*/true);
+  // The OpenCL delegate always uses the accurate version so use a higher
+  // tolerance for validation.
+  constexpr float kEpsilon = 1e-3;
 
   m.SetInput({
       0.0f, 1.0f, 3.0f,    // Row 1
       1.0f, -1.0f, -2.0f,  // Row 2
   });
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.GetOutput(), ElementsAreArray(ArrayFloatNear({
-                                 0.0f, 0.841192f, 2.99636f,           // Row 1
-                                 0.841192f, -0.158808f, -0.0454023f,  // Row 2
-                             })));
+  EXPECT_THAT(m.GetOutput(),
+              ElementsAreArray(ArrayFloatNear(
+                  {
+                      0.0f, 0.841192f, 2.99636f,           // Row 1
+                      0.841192f, -0.158808f, -0.0454023f,  // Row 2
+                  },
+                  kEpsilon)));
 }
 
 TEST(QuantizedGeluOpTest, GeluInt8) {
@@ -2806,6 +3051,46 @@ TEST(QuantizedGeluOpTest, GeluUInt8Approximate) {
                   0.f, 0.84375f, 2.97656f,          // Row 1
                   0.84375f, -0.164062f, -0.046875f  // Row 2
               })));
+}
+
+void GeluInt16Test(bool approximate) {
+  // Define an input for GELU op.
+  const auto gelu_input = {
+      -6.0f, -5.5f, -5.0f, -4.5f, -4.0f, -3.5f, -3.0f, -2.5f, -2.0f,
+      -1.5f, -1.0f, -0.5f, 0.0f,  0.5f,  1.0f,  1.5f,  2.0f,  2.5f,
+      3.0f,  3.5f,  4.0f,  4.5f,  5.0f,  5.5f,  6.0f,
+  };
+
+  // Initialize the float GELU op model and run it. An output will be generated
+  // and compared with the quantized GELU op model output.
+  FloatGeluOpModel model(
+      {TensorType_FLOAT32, {1, static_cast<int>(gelu_input.size())}},
+      approximate);
+  model.SetInput(gelu_input);
+  ASSERT_EQ(model.Invoke(), kTfLiteOk);
+  const auto float_gelu_output = model.GetOutput();
+
+  // Initialize the quantized GELU op model and run it.
+  const float kMin = -1;
+  const float kMax = 32767.f / 32768.f;
+  QuantizedGeluOpModel quant_model({TensorType_INT16,
+                                    {1, static_cast<int>(gelu_input.size())},
+                                    6 * kMin,
+                                    6 * kMax},
+                                   approximate);
+  quant_model.SetInput<int16_t>(gelu_input);
+  ASSERT_EQ(quant_model.Invoke(), kTfLiteOk);
+
+  // Compare the float and quantized GELU op model outputs.
+  EXPECT_THAT(quant_model.GetDequantizedOutput<int16_t>(),
+              ElementsAreArray(
+                  ArrayFloatNear(float_gelu_output, kQuantizedToleranceInt16)));
+}
+
+TEST(QuantizedGeluOpTest, GeluInt16) { GeluInt16Test(/*approximate=*/false); }
+
+TEST(QuantizedGeluOpTest, GeluInt16Approximate) {
+  GeluInt16Test(/*approximate=*/true);
 }
 
 INSTANTIATE_TEST_SUITE_P(

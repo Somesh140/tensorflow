@@ -70,7 +70,10 @@ __global__ void concat_variable_kernel(
   IntType num_inputs = input_ptr_data.size;
 
   // verbose declaration needed due to template
-  GPU_DYNAMIC_SHARED_MEM_DECL(sizeof(T), unsigned char, smem);
+  constexpr size_t kAlignTI =
+      (alignof(T) > alignof(IntType)) ? alignof(T) : alignof(IntType);
+  constexpr size_t kAlign = (kAlignTI < 16) ? 16 : kAlignTI;
+  GPU_DYNAMIC_SHARED_MEM_DECL(kAlign, unsigned char, smem);
   IntType* smem_col_scan = reinterpret_cast<IntType*>(smem);
 
   if (useSmem) {
@@ -202,20 +205,24 @@ void ConcatGPUImpl(const Eigen::GpuDevice& gpu_device,
       int split_size, typename TTypes<T, 2>::Matrix* output);
 
 TF_CALL_INTEGRAL_TYPES(REGISTER_GPUCONCAT32);  // int32 Needed for TensorLists.
-TF_CALL_bfloat16(REGISTER_GPUCONCAT32);
 TF_CALL_GPU_ALL_TYPES(REGISTER_GPUCONCAT32);
+TF_CALL_float8_e5m2(REGISTER_GPUCONCAT32);
+TF_CALL_float8_e4m3fn(REGISTER_GPUCONCAT32);
 
 TF_CALL_INTEGRAL_TYPES(REGISTER_GPUCONCAT64);  // int32 Needed for TensorLists.
-TF_CALL_bfloat16(REGISTER_GPUCONCAT64);
 TF_CALL_GPU_ALL_TYPES(REGISTER_GPUCONCAT64);
+TF_CALL_float8_e5m2(REGISTER_GPUCONCAT64);
+TF_CALL_float8_e4m3fn(REGISTER_GPUCONCAT64);
 
 TF_CALL_INTEGRAL_TYPES(REGISTER_GPU32);  // int32 Needed for TensorLists.
-TF_CALL_bfloat16(REGISTER_GPU32);
 TF_CALL_GPU_ALL_TYPES(REGISTER_GPU32);
+TF_CALL_float8_e5m2(REGISTER_GPU32);
+TF_CALL_float8_e4m3fn(REGISTER_GPU32);
 
 TF_CALL_INTEGRAL_TYPES(REGISTER_GPU64);  // int32 Needed for TensorLists.
-TF_CALL_bfloat16(REGISTER_GPU64);
 TF_CALL_GPU_ALL_TYPES(REGISTER_GPU64);
+TF_CALL_float8_e5m2(REGISTER_GPU64);
+TF_CALL_float8_e4m3fn(REGISTER_GPU64);
 
 #undef REGISTER_GPUCONCAT32
 #undef REGISTER_GPUCONCAT64

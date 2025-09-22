@@ -31,6 +31,7 @@ limitations under the License.
 #include "tensorflow/core/platform/protobuf.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/platform/test_benchmark.h"
+#include "tsl/platform/protobuf.h"
 
 namespace tensorflow {
 namespace {
@@ -60,9 +61,9 @@ class OptimizerCSETest : public ::testing::Test {
     if (index == 0) {
       return n->name();
     } else if (index == Graph::kControlSlot) {
-      return strings::StrCat(n->name(), ":control");
+      return absl::StrCat(n->name(), ":control");
     } else {
-      return strings::StrCat(n->name(), ":", index);
+      return absl::StrCat(n->name(), ":", index);
     }
   }
 
@@ -71,20 +72,20 @@ class OptimizerCSETest : public ::testing::Test {
     std::vector<string> edges;
     for (const Node* n : g->nodes()) {
       if (IncludeNode(n)) {
-        nodes.push_back(strings::StrCat(n->name(), "(", n->type_string(), ")"));
+        nodes.push_back(absl::StrCat(n->name(), "(", n->type_string(), ")"));
       }
     }
     for (const Edge* e : g->edges()) {
       if (IncludeNode(e->src()) && IncludeNode(e->dst())) {
-        edges.push_back(strings::StrCat(EdgeId(e->src(), e->src_output()), "->",
-                                        EdgeId(e->dst(), e->dst_input())));
+        edges.push_back(absl::StrCat(EdgeId(e->src(), e->src_output()), "->",
+                                     EdgeId(e->dst(), e->dst_input())));
       }
     }
     // Canonicalize
     std::sort(nodes.begin(), nodes.end());
     std::sort(edges.begin(), edges.end());
-    return strings::StrCat(absl::StrJoin(nodes, ";"), "|",
-                           absl::StrJoin(edges, ";"));
+    return absl::StrCat(absl::StrJoin(nodes, ";"), "|",
+                        absl::StrJoin(edges, ";"));
   }
 
   string DoCSE(const std::function<bool(const Node*)>& consider_fn = nullptr) {
@@ -333,7 +334,7 @@ TEST_F(OptimizerCSETest, Constant_Dedup) {
   }
   GraphDef gdef;
   test::graph::ToGraphDef(&g, &gdef);
-  InitGraph(gdef.DebugString());
+  InitGraph(tsl::LegacyUnredactedDebugString(gdef));
 
   EXPECT_EQ(OriginalGraph(),
             "n/_0(Const);n/_1(Const);n/_2(Const);n/_3(Const);"
@@ -369,7 +370,7 @@ void BM_CSE(::testing::benchmark::State& state) {
     InitGraph(s, graph);
     int N = graph->num_node_ids();
     if (first) {
-      state.SetLabel(strings::StrCat("Per graph node.  Nodes: ", N));
+      state.SetLabel(absl::StrCat("Per graph node.  Nodes: ", N));
       first = false;
     }
     {

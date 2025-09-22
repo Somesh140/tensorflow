@@ -14,19 +14,25 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/lite/delegates/flex/delegate.h"
 
+#include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <utility>
-#include <vector>
 
-#include "absl/strings/str_cat.h"
-#include "tensorflow/core/framework/variant.h"
-#include "tensorflow/core/lib/core/status.h"
-#include "tensorflow/lite/c/common.h"
-#include "tensorflow/lite/context_util.h"
-#include "tensorflow/lite/core/macros.h"
+#include "absl/status/status.h"
+#include "absl/strings/string_view.h"
+#include "tensorflow/core/framework/cancellation.h"
+#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/platform/tstring.h"
+#include "tensorflow/core/public/session_options.h"
+#include "tensorflow/lite/core/c/common.h"
+#include "tensorflow/lite/core/subgraph.h"
 #include "tensorflow/lite/delegates/flex/buffer_map.h"
 #include "tensorflow/lite/delegates/flex/kernel.h"
 #include "tensorflow/lite/delegates/flex/util.h"
+#include "tensorflow/lite/delegates/utils/simple_delegate.h"
+#include "tensorflow/lite/logger.h"
 #include "tensorflow/lite/minimal_logging.h"
 #include "tensorflow/lite/string_util.h"
 #include "tensorflow/lite/util.h"
@@ -41,14 +47,11 @@ TfLiteDelegateUniquePtr FlexDelegate::Create(
     base_delegate.reset(new FlexDelegate());
   }
   auto flex_delegate = TfLiteDelegateFactory::Create(std::move(base_delegate));
-  flex_delegate->CopyFromBufferHandle =
-      [](TfLiteContext* context, TfLiteDelegate* delegate,
-         TfLiteBufferHandle buffer_handle,
-         TfLiteTensor* tensor) -> TfLiteStatus {
-    return reinterpret_cast<FlexDelegate*>(delegate->data_)
-        ->CopyFromBufferHandle(context, buffer_handle, tensor);
-  };
   flex_delegate->flags |= kTfLiteDelegateFlagsAllowDynamicTensors;
+  // NOMUTANTS -- this flag has effects in profiler that disable the profiling
+  // of the macro operator "TfLiteFlexDelegate", which only shows in profiler
+  // output string. Adding flag check in Flex tests is currently not necessary.
+  flex_delegate->flags |= kTfLiteDelegateFlagsPerOperatorProfiling;
   reinterpret_cast<FlexDelegate*>(flex_delegate->data_)->base_delegate_ =
       flex_delegate.get();
   return flex_delegate;
@@ -72,7 +75,7 @@ TfLiteStatus FlexDelegate::Initialize(TfLiteContext* context) {
       base_delegate_);
   if (!status.ok()) {
     TF_LITE_KERNEL_LOG(context, "Failed to initialize TensorFlow context: %s",
-                       status.error_message().c_str());
+                       absl::StatusMessageAsCStr(status));
     return kTfLiteError;
   }
 
@@ -144,8 +147,8 @@ TfLiteStatus FlexDelegate::CopyFromBufferHandle(
   // The life cycle of the pointer will be managed by the reference counting in
   // the TensorFlow world and the pointer will be freed when all the buffer
   // maps, who own it, are gone.
-  if (flex::IsResourceOrVariant(output)) {
-    const size_t required_bytes = sizeof(tensorflow::Tensor**);
+  if (IsResourceOrVariant(output)) {
+    const size_t required_bytes = tflite::flex::kTensorflowResourceTensorBytes;
     const tensorflow::Tensor** tf_tensor_ptr =
         reinterpret_cast<const tensorflow::Tensor**>(malloc(required_bytes));
     *tf_tensor_ptr = buffer_map->GetTensorPtr(buffer_handle);
@@ -157,15 +160,13 @@ TfLiteStatus FlexDelegate::CopyFromBufferHandle(
     return kTfLiteOk;
   }
 
-  tensorflow::StringPiece t_data = t.tensor_data();
+  absl::string_view t_data = t.tensor_data();
 
   if (output->bytes != t_data.size()) {
     TF_LITE_KERNEL_LOG(context,
-                       absl::StrCat("The given ", output->bytes,
-                                    " bytes are not enough to store "
-                                    "TensorFlow's aligned buffer of size ",
-                                    t_data.size(), " bytes.")
-                           .c_str());
+                       "The given %zu bytes are not enough to store "
+                       "TensorFlow's aligned buffer of size %zu bytes.",
+                       output->bytes, t_data.size());
     return kTfLiteError;
   }
 

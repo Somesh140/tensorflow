@@ -17,6 +17,7 @@ limitations under the License.
 #define TENSORFLOW_COMPILER_TF2XLA_KERNELS_RESAMPLER_OPS_H_
 
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
+#include "tensorflow/core/framework/op_kernel.h"
 
 namespace tensorflow {
 
@@ -37,4 +38,4 @@ class ResamplerGradOp : public XlaOpKernel {
 
 }  // namespace tensorflow
 
-#endif  // THIRD_PARTY_TENSORFLOW_COMPILER_TF2XLA_KERNELS_RESAMPLER_OPS_H_
+#endif  // TENSORFLOW_COMPILER_TF2XLA_KERNELS_RESAMPLER_OPS_H_

@@ -15,26 +15,20 @@ limitations under the License.
 
 #include "tensorflow/dtensor/mlir/expansions/elementwise_spmd_expander.h"
 
-#include <iterator>
-#include <string>
-#include <utility>
+#include <cassert>
+#include <cstdint>
+#include <optional>
 
-#include "absl/strings/str_join.h"
+#include "absl/container/flat_hash_set.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/FormatVariadic.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/UseDefLists.h"  // from @llvm-project
-#include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
-#include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
-#include "tensorflow/compiler/mlir/utils/array_container_utils.h"
+#include "mlir/IR/Value.h"  // from @llvm-project
 #include "tensorflow/core/platform/errors.h"
-#include "tensorflow/core/platform/status.h"
 #include "tensorflow/dtensor/cc/dstatus.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/collectives.h"
@@ -48,12 +42,7 @@ namespace dtensor {
 namespace {
 
 StatusOr<llvm::SmallVector<int64_t, 4>> GetShape(mlir::Value value) {
-  auto type = value.getType().dyn_cast<mlir::RankedTensorType>();
-  if (!type)
-    return errors::InvalidArgument(
-        "Rank of input values must be statically known.");
-
-  const auto shape = type.getShape();
+  TF_ASSIGN_OR_RETURN(const auto shape, GetShapeOfValue(value));
   return llvm::SmallVector<int64_t, 4>{shape.begin(), shape.end()};
 }
 
@@ -105,11 +94,24 @@ StatusOr<mlir::Operation*> ElementwiseSPMDExpander::ExpandOp(
     absl::flat_hash_set<int> size_one_dims;
     for (int i = 0; i < shape.size(); ++i)
       if (shape[i] == 1) size_one_dims.emplace(i);
-    truncated_layout = truncated_layout.GetLayoutWithReducedDims(
-        size_one_dims, /*keep_dims=*/true);
+    TF_ASSIGN_OR_RETURN(truncated_layout,
+                        truncated_layout.GetLayoutWithReducedDims(
+                            size_one_dims, /*keep_dims=*/true));
     TF_ASSIGN_OR_RETURN(
         output, EmitRelayout(operand.get(), *operand_layout, truncated_layout));
     operand.set(output);
+  }
+
+  // If result is a resource, the shape of the result should be adjusted to
+  // local value of the resource, based on the layout for output.
+  // This logic is similar to VarHandle op SPMD expansion.
+  //
+  // Resource output is only likely to be for identity op. However, keeping
+  // the checkgeneric here.
+  auto op_result = op->getOpResult(0);
+  if (IsResourceType(op_result)) {
+    TF_RETURN_IF_ERROR(InferSPMDExpandedLocalShapeForResourceOutput(
+        &op_result, output_layout.value(), builder.getContext()));
   }
 
   // For element-wise op SPMD expansion, given that operand layouts are
@@ -122,7 +124,7 @@ StatusOr<mlir::Operation*> ElementwiseSPMDExpander::ExpandOp(
 StatusOr<llvm::DenseMap<int, Layout>>
 ElementwiseSPMDExpander::ComputeLayoutForward(
     mlir::Operation* op, const llvm::DenseMap<int, Layout>& input_layouts) {
-  TF_ASSIGN_OR_RETURN(absl::optional<Layout> merged_operand_layout,
+  TF_ASSIGN_OR_RETURN(std::optional<Layout> merged_operand_layout,
                       GetMergedOperandLayout(input_layouts, op));
 
   if (merged_operand_layout) {
@@ -154,12 +156,11 @@ ElementwiseSPMDExpander::ComputeLayoutBackward(
     auto operand = operand_and_index.value();
 
     TF_ASSIGN_OR_RETURN(auto operand_shape, GetShape(operand));
+    Layout output_layout_truncated = output_layout.Truncate(
+        output_layout.sharding_spec_strs().size() - operand_shape.size(),
+        /*end=*/true);
     auto inferred_operand_layout_strs =
-        output_layout
-            .Truncate(
-                output_layout.sharding_specs().size() - operand_shape.size(),
-                /*end=*/true)
-            .sharding_spec_strs();
+        output_layout_truncated.sharding_spec_strs();
 
     if (inferred_operand_layout_strs.size() != operand_shape.size())
       return errors::FailedPrecondition(

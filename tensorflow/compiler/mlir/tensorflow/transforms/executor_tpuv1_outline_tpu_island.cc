@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <memory>
+
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
@@ -27,9 +29,7 @@ limitations under the License.
 #include "mlir/Transforms/RegionUtils.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_executor.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/bridge.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/passes_detail.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/attribute_utils.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/error_util.h"
 
@@ -40,13 +40,16 @@ namespace {
 constexpr llvm::StringRef kNestedModule = "_tpu_v1_compat_outlined";
 constexpr llvm::StringRef kOutlinedFuncPrefix = "_tpu_v1_compat_outlined_func";
 
+#define GEN_PASS_DEF_TPUBRIDGEEXECUTORISLANDOUTLININGPASS
+#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_passes.h.inc"
+
 // Extract the islands containing a TPU cluster computation into an outlined
 // function in a nested module. This will allow to run the usual bridge on this
 // nested module which exhibit a more friendly "V2-like" structure.
 // This is only intended for V1 compatibility mode where the bridge runs without
 // feed/fetches on session create/extend.
 struct TPUBridgeExecutorIslandOutlining
-    : public TF::TPUBridgeExecutorIslandOutliningPassBase<
+    : public impl::TPUBridgeExecutorIslandOutliningPassBase<
           TPUBridgeExecutorIslandOutlining> {
   void runOnOperation() override;
 };
@@ -110,7 +113,7 @@ void TPUBridgeExecutorIslandOutlining::runOnOperation() {
 
     // First the captured values in the island are function arguments
     llvm::SetVector<Value> operands;
-    getUsedValuesDefinedAbove(island_op.body(), operands);
+    getUsedValuesDefinedAbove(island_op.getBody(), operands);
 
     SmallVector<Type, 16> func_operand_types;
     func_operand_types.reserve(operands.size());
@@ -127,8 +130,9 @@ void TPUBridgeExecutorIslandOutlining::runOnOperation() {
     // Create the outlined function
     SmallString<32> name = kOutlinedFuncPrefix;
     name += llvm::Twine(prefix_id++).str();
-    auto outlined_func = OpBuilder(ctx).create<func::FuncOp>(island_op.getLoc(),
-                                                             name, func_type);
+    auto builder = OpBuilder(ctx);
+    auto outlined_func =
+        func::FuncOp::create(builder, island_op.getLoc(), name, func_type);
     outlined_symbol_table.insert(outlined_func);
     outlined_func.setNested();
 
@@ -136,13 +140,13 @@ void TPUBridgeExecutorIslandOutlining::runOnOperation() {
     // new function later.
     {
       YieldOp yield_op = island_op.GetYield();
-      outlined_func.getBody().takeBody(island_op.body());
+      outlined_func.getBody().takeBody(island_op.getBody());
 
       // Replace the yield with a return
       OpBuilder replacer(yield_op);
-      island_op.body().push_back(new Block);
-      replacer.create<mlir::func::ReturnOp>(yield_op.getLoc(),
-                                            yield_op.getOperands());
+      island_op.getBody().push_back(new Block);
+      mlir::func::ReturnOp::create(replacer, yield_op.getLoc(),
+                                   yield_op.getOperands());
       yield_op.erase();
     }
 
@@ -159,9 +163,10 @@ void TPUBridgeExecutorIslandOutlining::runOnOperation() {
 
     // The function is in place in the nested module, create a call and yield in
     // the original island.
-    OpBuilder builder = OpBuilder::atBlockEnd(&island_op.GetBody());
-    auto call_op = builder.create<mlir::TF::PartitionedCallOp>(
-        island_op.getLoc(), func_result_types, operands.getArrayRef(),
+    builder.setInsertionPointToEnd(&island_op.GetBody());
+    auto call_op = mlir::TF::PartitionedCallOp::create(
+        builder, island_op.getLoc(), func_result_types, operands.getArrayRef(),
+        /*args_attrs=*/nullptr, /*res_attrs=*/nullptr,
         SymbolRefAttr::get(
             builder.getContext(), kNestedModule,
             SymbolRefAttr::get(builder.getContext(), outlined_func.getName())),
@@ -169,7 +174,7 @@ void TPUBridgeExecutorIslandOutlining::runOnOperation() {
         /*config_proto=*/builder.getStringAttr(""),
         /*executor_type=*/builder.getStringAttr(""));
     SmallVector<Value, 16> yield_operands(call_op.getResults());
-    builder.create<YieldOp>(island_op.getLoc(), yield_operands);
+    YieldOp::create(builder, island_op.getLoc(), yield_operands);
   }
 
   // Outline all the transitively called functions by moving them in the
@@ -177,13 +182,14 @@ void TPUBridgeExecutorIslandOutlining::runOnOperation() {
   for (func::FuncOp func : outlined_module.getOps<func::FuncOp>()) {
     func.walk([&](Operation *op) {
       for (NamedAttribute attr : op->getAttrs()) {
-        if (auto symbol_ref = attr.getValue().dyn_cast<FlatSymbolRefAttr>()) {
+        if (auto symbol_ref =
+                mlir::dyn_cast<FlatSymbolRefAttr>(attr.getValue())) {
           MoveFuncOp(symbol_ref, symbol_table, outlined_symbol_table);
           continue;
         }
-        if (auto array_attr = attr.getValue().dyn_cast<ArrayAttr>()) {
+        if (auto array_attr = mlir::dyn_cast<ArrayAttr>(attr.getValue())) {
           for (const Attribute &attribute : array_attr) {
-            auto symbol_ref = attribute.dyn_cast<FlatSymbolRefAttr>();
+            auto symbol_ref = mlir::dyn_cast<FlatSymbolRefAttr>(attribute);
             if (!symbol_ref) continue;
             MoveFuncOp(symbol_ref, symbol_table, outlined_symbol_table);
           }

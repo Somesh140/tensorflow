@@ -81,6 +81,11 @@ def LiftVariablesInvalidSessionTestPass : Pass<"tf-saved-model-lift-variables-in
 def LiftVariablesTestPass : Pass<"tf-saved-model-lift-variables-test", "ModuleOp"> {
   let summary = "Lift variables and save them as global tensors";
   let constructor = "mlir::tf_test::CreateLiftVariablesTestPass()";
+
+  let options = [
+    Option<"import_variables_as_dense_resources_", "import-variables-as-dense-resources", "bool", /*default=*/"false",
+           "Import variables as dense resources">,
+  ];
 }
 
 def InitializeVariablesInSessionInitializerPass : Pass<"tf-saved-model-initialize-variables-in-session-init", "ModuleOp"> {
@@ -89,3 +94,13 @@ def InitializeVariablesInSessionInitializerPass : Pass<"tf-saved-model-initializ
   let constructor = "mlir::tf_test::CreateInitializeVariablesInSessionInitializerTestPass()";
 }
 
+def ResourceAnalyzerTestPass : Pass<"tf-resource-analyzer-test", "ModuleOp"> {
+  let summary = "Test pass for resource analysis.";
+
+  let description = [{
+    Test pass for ResourceAnalyzer, which analyzes whether a resource value is
+    potentially written.
+  }];
+
+  let constructor = "::mlir::tf_test::CreateResourceAnalyzerTestPass()";
+}

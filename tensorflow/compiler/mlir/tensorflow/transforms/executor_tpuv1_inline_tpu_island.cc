@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <memory>
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -25,13 +27,12 @@ limitations under the License.
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Transforms/Inliner.h"  // from @llvm-project
 #include "mlir/Transforms/InliningUtils.h"  // from @llvm-project
 #include "mlir/Transforms/Passes.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_executor.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/bridge.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/passes_detail.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/error_util.h"
 
 #define DEBUG_TYPE "tf-executor-tpu-v1-island-inlining"
@@ -42,8 +43,11 @@ namespace tf_executor {
 namespace {
 constexpr llvm::StringRef kNestedModule = "_tpu_v1_compat_outlined";
 
+#define GEN_PASS_DEF_EXECUTORTPUV1ISLANDINLININGPASS
+#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_passes.h.inc"
+
 struct ExecutorTPUV1IslandInliningPass
-    : public TF::ExecutorTPUV1IslandInliningPassBase<
+    : public impl::ExecutorTPUV1IslandInliningPassBase<
           ExecutorTPUV1IslandInliningPass> {
   void runOnOperation() override;
 };
@@ -54,8 +58,10 @@ void ExecutorTPUV1IslandInliningPass::runOnOperation() {
   if (!nested_module) return;
 
   InlinerInterface inliner(&getContext());
+  InlinerConfig config;
   auto walk_result = getOperation().walk([&](TF::PartitionedCallOp call_op) {
-    if (!call_op.f().getRootReference().getValue().startswith(kNestedModule))
+    if (!call_op.getF().getRootReference().getValue().starts_with(
+            kNestedModule))
       return WalkResult::advance();
     // This is a call we need to inline!
     LLVM_DEBUG(llvm::dbgs()
@@ -65,7 +71,7 @@ void ExecutorTPUV1IslandInliningPass::runOnOperation() {
     auto called_func =
         dyn_cast_or_null<func::FuncOp>(call_interface.resolveCallable());
 
-    if (failed(inlineCall(inliner, call_interface,
+    if (failed(inlineCall(inliner, config.getCloneCallback(), call_interface,
                           cast<CallableOpInterface>(called_func.getOperation()),
                           called_func.getCallableRegion(),
                           /* shouldCloneInlinedRegion = */ false))) {

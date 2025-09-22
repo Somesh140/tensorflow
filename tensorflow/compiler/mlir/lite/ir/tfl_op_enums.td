@@ -27,9 +27,9 @@ include "tensorflow/compiler/mlir/lite/ir/tfl_op_interfaces.td"
 // Referred TF_AnyStrAttrOf in tensorflow/compiler/mlir/tensorflow/ir/tf_op_base.td
 class TFL_AnyStrAttrOf<list<string> cases> : StringBasedAttr<
   CPred<!foldl(
-      "$_self.cast<StringAttr>().getValue() == \"" # !head(cases) # "\"",
+      "llvm::cast<StringAttr>($_self).getValue() == \"" # !head(cases) # "\"",
       !foreach(case, !tail(cases),
-               "$_self.cast<StringAttr>().getValue() == \"" # case # "\""),
+               "llvm::cast<StringAttr>($_self).getValue() == \"" # case # "\""),
       prev, cur, prev # " || " # cur)>,
   "string attribute whose value is " #
     !foldl(/*init*/!head(cases), /*list*/!tail(cases),
@@ -150,6 +150,20 @@ def SparsityParameterAttr : AttrDef<TFL_Dialect, "SparsityParameter"> {
   );
   let summary = "Sparsity parameter.";
   let assemblyFormat = "`<` struct(params) `>`";
+}
+
+def TFL_ConstBytesAttr : AttrDef<TFL_Dialect, "ConstBytes"> {
+  let summary = "A string attribute representation of compiled bytes";
+  let description = [{
+    Syntax Examples:
+
+    ```mlir
+    #tfl<const_bytes : "0xDEADBEEF">
+    ```
+  }];
+  let mnemonic = "const_bytes";
+  let parameters = (ins StringRefParameter<"">:$value);
+  let hasCustomAssemblyFormat = 1;
 }
 
 #endif // TFL_OP_ENUMS

@@ -19,8 +19,13 @@ limitations under the License.
 #include <sstream>
 #include <string>
 
+#include "tensorflow/core/util/stats_calculator.h"
+#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/core/api/profiler.h"
+#include "tensorflow/lite/interpreter.h"
 #include "tensorflow/lite/profiling/memory_info.h"
-#include "tensorflow/lite/schema/schema_generated.h"
+#include "tensorflow/lite/profiling/profile_buffer.h"
+#include "tensorflow/lite/profiling/profile_summary_formatter.h"
 
 namespace tflite {
 namespace profiling {
@@ -150,6 +155,20 @@ void ProfileSummarizer::ProcessProfiles(
       delegate_stats_calculator_->AddNodeStats(node_name_in_stats,
                                                "DelegateOpInvoke", node_num,
                                                node_exec_time, 0 /*memory */);
+    } else if (event->event_type ==
+               Profiler::EventType::DELEGATE_PROFILED_OPERATOR_INVOKE_EVENT) {
+      // This event type handles the delegate ops that are profiled in the
+      // Operator-wise Profiling section, not in the Delegate internal section.
+      const std::string node_name(event->tag);
+      // For delegate op, node name is treated as the type in stats.
+      const std::string type_in_stats(node_name);
+      // Append event_metadata to node name because 'stats_calculator' can not
+      // distinguish two nodes w/ the same 'node_name'.
+      const auto node_name_in_stats =
+          "Delegate/" + node_name + ":" + std::to_string(event->event_metadata);
+
+      stats_calculator->AddNodeStats(node_name_in_stats, type_in_stats,
+                                     node_num, node_exec_time, 0 /*memory */);
     } else {
       // Note: a different stats_calculator could be used to record
       // non-op-invoke events so that these could be separated from
@@ -164,11 +183,12 @@ void ProfileSummarizer::ProcessProfiles(
       node_name += "/" + std::to_string(event->extra_event_metadata);
       stats_calculator->AddNodeStats(node_name, event->tag, node_num,
                                      node_exec_time,
-                                     node_mem_usage.max_rss_kb * 1000.0);
+                                     node_mem_usage.mem_footprint_kb * 1000.0);
     }
 
-    // Add total time except actual delegate ops since the elapsed time of the
-    // delegate ops inside are already combined at a fused DELEGATE op.
+    // Add total time except delegate ops that are profiled separately since the
+    // elapsed time of the delegate ops inside are already combined at a fused
+    // DELEGATE op.
     if (event->event_type !=
         Profiler::EventType::DELEGATE_OPERATOR_INVOKE_EVENT) {
       total_us_per_subgraph_map[subgraph_index] += node_exec_time;
@@ -186,6 +206,8 @@ void ProfileSummarizer::ProcessProfiles(
   if (delegate_internal_total_us > 0) {
     delegate_stats_calculator_->UpdateRunTotalUs(delegate_internal_total_us);
   }
+
+  SetSubgraphNameMap(interpreter);
 }
 
 tensorflow::StatsCalculator* ProfileSummarizer::GetStatsCalculator(

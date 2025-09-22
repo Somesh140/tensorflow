@@ -21,13 +21,13 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "absl/synchronization/notification.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/notification.h"
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/thread_annotations.h"
-
 namespace tensorflow {
 
 // RecordYielder produces value records from a set of tfrecord files
@@ -90,7 +90,7 @@ class RecordYielder {
   RecordYielder& operator=(const RecordYielder&) = delete;
 
   // Yields one 'value'.
-  Status YieldOne(tstring* value);
+  absl::Status YieldOne(tstring* value);
 
   // Returns the current epoch number.
   int64_t current_epoch() const { return epoch_; }
@@ -110,7 +110,7 @@ class RecordYielder {
 
   // Turned to true when this is deleted.
   bool stop_ TF_GUARDED_BY(mu_) = false;
-  Status status_ TF_GUARDED_BY(mu_);
+  absl::Status status_ TF_GUARDED_BY(mu_);
 
   // PRG used for randomization.
   std::mt19937_64 rnd_ TF_GUARDED_BY(mu_);
@@ -125,7 +125,7 @@ class RecordYielder {
   int64_t num_records_yielded_in_epoch_ = 0;
 
   // Trigger when the main loop has exited.
-  Notification main_loop_done_;
+  absl::Notification main_loop_done_;
 
   // condition_variables.
   condition_variable buf_empty_;
@@ -151,7 +151,7 @@ class RecordYielder {
   void MainLoop();
   struct Shard;
   void ShardLoop(Shard* shard);
-  bool ShouldFinish(const Status& s);
+  bool ShouldFinish(const absl::Status& s);
   bool Add(std::vector<string>* values);
 };
 

@@ -14,12 +14,30 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <complex>
+#include <cstdint>
+#include <cstdlib>
+#include <initializer_list>
 #include <limits>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
+#include <gtest/gtest.h>
+#include "Eigen/Core"  // from @eigen_archive
+#include "llvm/ADT/STLExtras.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "tensorflow/core/framework/device.h"
+#include "tensorflow/core/framework/device_factory.h"
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/kernels/mlir_generated/base_ops_test.h"
 #include "tensorflow/core/kernels/mlir_generated/base_unary_ops_test.h"
+#include "tensorflow/core/platform/env.h"
 
 namespace tensorflow {
 namespace {
@@ -825,6 +843,11 @@ GENERATE_DEFAULT_TEST(OnesLike, DT_DOUBLE, DT_DOUBLE, baseline_ones_like,
                       test::OpsTestConfig().ExpectStrictlyEqual())
 GENERATE_DEFAULT_TEST(OnesLike, DT_INT64, DT_INT64, baseline_ones_like,
                       test::OpsTestConfig().ExpectStrictlyEqual())
+GENERATE_DEFAULT_TEST(OnesLike, DT_COMPLEX64, DT_COMPLEX64, baseline_ones_like,
+                      test::OpsTestConfig().ExpectStrictlyEqual())
+GENERATE_DEFAULT_TEST(OnesLike, DT_COMPLEX128, DT_COMPLEX128,
+                      baseline_ones_like,
+                      test::OpsTestConfig().ExpectStrictlyEqual())
 
 // These kernels are JIT-compiled.
 #if defined(MLIR_GENERATED_GPU_KERNELS_ENABLED)
@@ -1278,6 +1301,12 @@ GENERATE_DEFAULT_TEST(ZerosLike, DT_FLOAT, DT_FLOAT, baseline_zeros_like,
 GENERATE_DEFAULT_TEST(ZerosLike, DT_DOUBLE, DT_DOUBLE, baseline_zeros_like,
                       test::OpsTestConfig().ExpectStrictlyEqual())
 GENERATE_DEFAULT_TEST(ZerosLike, DT_INT64, DT_INT64, baseline_zeros_like,
+                      test::OpsTestConfig().ExpectStrictlyEqual())
+GENERATE_DEFAULT_TEST(ZerosLike, DT_COMPLEX64, DT_COMPLEX64,
+                      baseline_zeros_like,
+                      test::OpsTestConfig().ExpectStrictlyEqual())
+GENERATE_DEFAULT_TEST(ZerosLike, DT_COMPLEX128, DT_COMPLEX128,
+                      baseline_zeros_like,
                       test::OpsTestConfig().ExpectStrictlyEqual())
 
 // These kernels are JIT-compiled.

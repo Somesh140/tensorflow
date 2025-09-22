@@ -15,11 +15,15 @@ limitations under the License.
 #include "tensorflow/lite/delegates/coreml/builders/reshape_op_builder.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <iterator>
 #include <memory>
 #include <string>
 
-#include "tensorflow/lite/c/builtin_op_data.h"
-#include "tensorflow/lite/c/common.h"
+#include "mlmodel/format/NeuralNetwork.pb.h"
+#include "tensorflow/lite/core/c/builtin_op_data.h"
+#include "tensorflow/lite/core/c/common.h"
 #include "tensorflow/lite/delegates/coreml/builders/op_builder.h"
 #include "tensorflow/lite/delegates/coreml/builders/op_factory.h"
 #include "tensorflow/lite/delegates/coreml/builders/op_validator.h"

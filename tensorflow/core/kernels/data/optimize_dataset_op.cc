@@ -83,10 +83,10 @@ void MakeDatasetHelper(OpKernelContext* ctx,
   };
 
   core::RefCountPtr<DatasetBase> rewritten;
-  Status s = RewriteDataset(ctx, input, std::move(config_factory),
-                            /*record_fingerprint=*/true, &rewritten);
+  absl::Status s = RewriteDataset(ctx, input, std::move(config_factory),
+                                  /*record_fingerprint=*/false, &rewritten);
   *output = rewritten.release();
-  if (errors::IsDeadlineExceeded(s)) {
+  if (absl::IsDeadlineExceeded(s)) {
     // Ignore DeadlineExceeded as it implies that the attempted rewrite took too
     // long which should not prevent further computation.
     LOG(WARNING) << s.ToString();

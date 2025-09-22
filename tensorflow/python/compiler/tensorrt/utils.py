@@ -18,7 +18,7 @@ import collections
 import os
 import re
 
-from distutils import version
+from packaging import version
 
 from tensorflow.compiler.tf2tensorrt import _pywrap_py_utils
 from tensorflow.core.protobuf import rewriter_config_pb2
@@ -60,8 +60,8 @@ def version_tuple_to_string(ver_tuple):
 
 
 def _is_tensorrt_version_greater_equal(trt_ver, target_ver):
-  trt_ver = version.LooseVersion(version_tuple_to_string(trt_ver))
-  target_ver = version.LooseVersion(version_tuple_to_string(target_ver))
+  trt_ver = version.Version(version_tuple_to_string(trt_ver))
+  target_ver = version.Version(version_tuple_to_string(target_ver))
 
   return trt_ver >= target_ver
 
@@ -242,7 +242,7 @@ def draw_graphdef_as_graphviz(graphdef, dot_output_filename):
 
     print("  }", file=f)
 
-    # Step 3: Alignement of the legend with the graph.
+    # Step 3: Alignment of the legend with the graph.
     print("\n  edge[style=\"invisible\", dir=\"none\"];", file=f)
     for dtype in dtype_index.keys():
       for node_name in nodes_with_no_inputs:

@@ -17,21 +17,24 @@ limitations under the License.
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
+#include <memory>
 #include <numeric>
 #include <random>
-#include <type_traits>
 #include <vector>
 
 #include <gtest/gtest.h>
-#include "fp16.h"  // from @FP16
-#include "flatbuffers/flatbuffers.h"  // from @flatbuffers
-#include "tensorflow/lite/c/builtin_op_data.h"
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "flatbuffers/string.h"  // from @flatbuffers
+#include "tensorflow/compiler/mlir/lite/schema/schema_conversion_utils.h"
+#include "tensorflow/lite/core/interpreter_builder.h"
+#include "tensorflow/lite/core/kernels/register.h"
+#include "tensorflow/lite/delegates/xnnpack/xnnpack_delegate.h"
 #include "tensorflow/lite/interpreter.h"
-#include "tensorflow/lite/kernels/register.h"
-#include "tensorflow/lite/model.h"
-#include "tensorflow/lite/schema/schema_conversion_utils.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/version.h"
 
@@ -88,13 +91,11 @@ void QuantizedTransposeConvTester::Test(TfLiteDelegate* delegate) const {
       std::bind(std::uniform_int_distribution<int32_t>(0, 255), rng);
   uint8_t* default_input_data = reinterpret_cast<uint8_t*>(
       default_interpreter->input_tensor(0)->data.data);
-  std::generate(default_input_data, default_input_data + input_data_size,
-                std::ref(uint8rng));
+  std::generate_n(default_input_data, input_data_size, std::ref(uint8rng));
 
   uint8_t* xnnpack_input_data = reinterpret_cast<uint8_t*>(
       delegate_interpreter->input_tensor(0)->data.data);
-  std::copy(default_input_data, default_input_data + input_data_size,
-            xnnpack_input_data);
+  std::copy_n(default_input_data, input_data_size, xnnpack_input_data);
 
   ASSERT_EQ(default_interpreter->Invoke(), kTfLiteOk);
   ASSERT_EQ(delegate_interpreter->Invoke(), kTfLiteOk);

@@ -16,6 +16,7 @@ limitations under the License.
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "absl/status/status.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
@@ -61,8 +62,7 @@ void TacModule::AddTACPass(mlir::OpPassManager* pass_manager,
         mlir::createCanonicalizerPass());
     pass_manager->addPass(
         mlir::TFL::CreateLegalizeTFPass(/*run_tfl_runtime_verification=*/true));
-    pass_manager->addPass(
-        mlir::TFL::CreateOptimizePass(/*enable_canonicalization=*/true));
+    pass_manager->addPass(mlir::TFL::CreateOptimizePass());
   }
 
   pass_manager->addPass(mlir::TFL::tac::CreateComputeCostPass());
@@ -80,7 +80,7 @@ const tac::TargetHardware* TacModule::GetTargetHardware(
 }
 
 absl::Status TacModule::RunTacPasses(mlir::ModuleOp* module, bool debug_mode) {
-  mlir::PassManager pm(module->getContext(),
+  mlir::PassManager pm((*module)->getName(),
                        mlir::OpPassManager::Nesting::Implicit);
   AddTACPass(&pm, options_.hardware_backends);
   if (!debug_mode) {

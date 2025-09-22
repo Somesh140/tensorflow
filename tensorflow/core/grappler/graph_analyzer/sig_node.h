@@ -20,6 +20,8 @@ limitations under the License.
 #include <memory>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/status/status.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/grappler/graph_analyzer/gen_node.h"
@@ -256,7 +258,7 @@ struct Signature {
 
   // Using the map, computes the rest of the fields of a signature.
   // Returns an error is the graph is too big.
-  Status Compute();
+  absl::Status Compute();
 
   // Convert the computed signature to a string representation.
   string ToString() const;

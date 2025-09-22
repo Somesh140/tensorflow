@@ -16,7 +16,7 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_KERNELS_EIGEN_POOLING_H_
 #define TENSORFLOW_CORE_KERNELS_EIGEN_POOLING_H_
 
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+#include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
 
 namespace Eigen {
 
@@ -55,9 +55,9 @@ SpatialMaxPooling(const Input& input, DenseIndex patchRows,
                       YOU_MADE_A_PROGRAMMING_MISTAKE);
 
   typedef typename internal::traits<Input>::Index TensorIndex;
-  TensorRef<Tensor<typename internal::traits<Input>::Scalar,
-                   internal::traits<Input>::NumDimensions,
-                   internal::traits<Input>::Layout, TensorIndex> >
+  TensorRef<const Tensor<typename internal::traits<Input>::Scalar,
+                         internal::traits<Input>::NumDimensions,
+                         internal::traits<Input>::Layout, TensorIndex>>
       in(input);
 
   const DenseIndex patchRowsEff =
@@ -133,12 +133,12 @@ template <typename Input>
 EIGEN_ALWAYS_INLINE static const TensorReshapingOp<
     const Eigen::DSizes<DenseIndex, internal::traits<Input>::NumDimensions>,
     const TensorReductionOp<
-        internal::MaxReducer<float>,
-        const Eigen::IndexList<Eigen::type2index<1> >,
+        internal::MaxReducer<
+            std::remove_const_t<typename internal::traits<Input>::Scalar>>,
+        const Eigen::IndexList<Eigen::type2index<1>>,
         const TensorReshapingOp<
             const Eigen::DSizes<DenseIndex, 3>,
-            const TensorVolumePatchOp<Dynamic, Dynamic, Dynamic,
-                                      const Input> > > >
+            const TensorVolumePatchOp<Dynamic, Dynamic, Dynamic, const Input>>>>
 CuboidMaxPooling(const Input& input, DenseIndex patchPlanes,
                  DenseIndex patchRows, DenseIndex patchCols,
                  DenseIndex stridePlanes, DenseIndex strideRows,
@@ -148,9 +148,9 @@ CuboidMaxPooling(const Input& input, DenseIndex patchPlanes,
   static const bool isColMajor = (internal::traits<Input>::Layout == ColMajor);
 
   typedef typename internal::traits<Input>::Index TensorIndex;
-  TensorRef<Tensor<typename internal::traits<Input>::Scalar,
-                   internal::traits<Input>::NumDimensions,
-                   internal::traits<Input>::Layout, TensorIndex> >
+  TensorRef<const Tensor<typename internal::traits<Input>::Scalar,
+                         internal::traits<Input>::NumDimensions,
+                         internal::traits<Input>::Layout, TensorIndex>>
       in(input);
 
   static const int idxPlanes = isColMajor ? 1 : 3;
@@ -199,13 +199,16 @@ CuboidMaxPooling(const Input& input, DenseIndex patchPlanes,
     pre_reduce_dims[2] = post_reduce_dims[4];
   }
 
+  typedef std::remove_const_t<typename internal::traits<Input>::Scalar>
+      CoeffReturnType;
+
   // Take advantage of cxx11 to give the compiler information it can use to
   // optimize the code.
   Eigen::IndexList<Eigen::type2index<1> > reduction_dims;
   return input
       .extract_volume_patches(patchPlanes, patchRows, patchCols, stridePlanes,
                               strideRows, strideCols, padding_type,
-                              -Eigen::NumTraits<float>::highest())
+                              -Eigen::NumTraits<CoeffReturnType>::highest())
       .reshape(pre_reduce_dims)
       .maximum(reduction_dims)
       .reshape(post_reduce_dims);
@@ -380,9 +383,9 @@ SpatialAvgPooling(const Input& input, DenseIndex patchRows,
                       YOU_MADE_A_PROGRAMMING_MISTAKE);
 
   typedef typename internal::traits<Input>::Index TensorIndex;
-  TensorRef<Tensor<typename internal::traits<Input>::Scalar,
-                   internal::traits<Input>::NumDimensions,
-                   internal::traits<Input>::Layout, TensorIndex> >
+  TensorRef<const Tensor<typename internal::traits<Input>::Scalar,
+                         internal::traits<Input>::NumDimensions,
+                         internal::traits<Input>::Layout, TensorIndex>>
       in(input);
 
   const DenseIndex patchRowsEff =
@@ -457,12 +460,12 @@ template <typename Input>
 EIGEN_ALWAYS_INLINE static const TensorReshapingOp<
     const Eigen::DSizes<DenseIndex, internal::traits<Input>::NumDimensions>,
     const TensorReductionOp<
-        internal::AvgPoolMeanReducer<float>,
-        const Eigen::IndexList<Eigen::type2index<1> >,
+        internal::AvgPoolMeanReducer<
+            std::remove_const_t<typename internal::traits<Input>::Scalar>>,
+        const Eigen::IndexList<Eigen::type2index<1>>,
         const TensorReshapingOp<
             const Eigen::DSizes<DenseIndex, 3>,
-            const TensorVolumePatchOp<Dynamic, Dynamic, Dynamic,
-                                      const Input> > > >
+            const TensorVolumePatchOp<Dynamic, Dynamic, Dynamic, const Input>>>>
 CuboidAvgPooling(const Input& input, DenseIndex patchPlanes,
                  DenseIndex patchRows, DenseIndex patchCols,
                  DenseIndex stridePlanes, DenseIndex strideRows,
@@ -472,9 +475,9 @@ CuboidAvgPooling(const Input& input, DenseIndex patchPlanes,
   static const bool isColMajor = (internal::traits<Input>::Layout == ColMajor);
 
   typedef typename internal::traits<Input>::Index TensorIndex;
-  TensorRef<Tensor<typename internal::traits<Input>::Scalar,
-                   internal::traits<Input>::NumDimensions,
-                   internal::traits<Input>::Layout, TensorIndex> >
+  TensorRef<const Tensor<typename internal::traits<Input>::Scalar,
+                         internal::traits<Input>::NumDimensions,
+                         internal::traits<Input>::Layout, TensorIndex>>
       in(input);
 
   static const int idxPlanes = isColMajor ? 1 : 3;
@@ -532,7 +535,7 @@ CuboidAvgPooling(const Input& input, DenseIndex patchPlanes,
   return input
       .extract_volume_patches(patchPlanes, patchRows, patchCols, stridePlanes,
                               strideRows, strideCols, padding_type,
-                              -Eigen::NumTraits<float>::highest())
+                              -Eigen::NumTraits<CoeffReturnType>::highest())
       .reshape(pre_reduce_dims)
       .reduce(reduction_dims, mean_with_nan)
       .reshape(post_reduce_dims);

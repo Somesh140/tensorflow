@@ -15,13 +15,13 @@ limitations under the License.
 
 #include "tensorflow/core/nccl/collective_communicator.h"
 
-#include "tensorflow/core/framework/cancellation.h"
+#include "tensorflow/core/framework/collective.h"
+#include "tensorflow/core/protobuf/config.pb.h"
 
 #if TENSORFLOW_USE_NCCL && (GOOGLE_CUDA || TENSORFLOW_USE_ROCM)
 
 #include "absl/memory/memory.h"
 #include "tensorflow/core/nccl/nccl_manager.h"
-#include "tensorflow/core/platform/tracing.h"
 #include "tensorflow/core/profiler/lib/traceme.h"
 
 namespace tensorflow {
@@ -158,6 +158,22 @@ void NcclCommunicator::Enqueue(std::shared_ptr<CollectiveContext> col_ctx,
       } else {
         nccl_manager_.AddBroadcastRecv(std::move(participant), context);
       }
+      break;
+    }
+    case REDUCE_SCATTER_COLLECTIVE: {
+      ncclRedOp_t reduction_op;
+      Status s =
+          ReductionOp(col_params->merge_op->type_string(), &reduction_op);
+      if (!s.ok()) {
+        participant->done_callback(s);
+        return;
+      }
+      nccl_manager_.AddToReduceScatter(std::move(participant), context,
+                                       reduction_op);
+      break;
+    }
+    case ALL_TO_ALL_COLLECTIVE: {
+      nccl_manager_.AddToAllToAll(std::move(participant), context);
       break;
     }
     default: {

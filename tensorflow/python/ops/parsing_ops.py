@@ -17,10 +17,13 @@
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import sparse_tensor
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import control_flow_assert
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import gen_parsing_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import parsing_config
+# Ensure parsing_ops gradients are registered
+from tensorflow.python.ops import parsing_grad  # pylint: disable=unused-import
 # go/tf-wildcard-import
 # pylint: disable=wildcard-import,undefined-variable
 from tensorflow.python.ops.gen_parsing_ops import *
@@ -28,14 +31,6 @@ from tensorflow.python.ops.gen_parsing_ops import *
 from tensorflow.python.util import deprecation
 from tensorflow.python.util import dispatch
 from tensorflow.python.util.tf_export import tf_export
-
-
-ops.NotDifferentiable("DecodeRaw")
-ops.NotDifferentiable("DecodePaddedRaw")
-ops.NotDifferentiable("ParseTensor")
-ops.NotDifferentiable("SerializeTensor")
-ops.NotDifferentiable("StringToNumber")
-
 
 VarLenFeature = parsing_config.VarLenFeature
 RaggedFeature = parsing_config.RaggedFeature
@@ -89,8 +84,8 @@ def parse_example_v2(serialized, features, example_names=None, name=None):
   `serialized`.
 
   This op parses serialized examples into a dictionary mapping keys to `Tensor`
-  `SparseTensor`, and `RaggedTensor` objects. `features` is a dict from keys to
-  `VarLenFeature`, `SparseFeature`, `RaggedFeature`, and `FixedLenFeature`
+  `SparseTensor`, and `RaggedTensor` objects. `features` is a Mapping from keys
+  to `VarLenFeature`, `SparseFeature`, `RaggedFeature`, and `FixedLenFeature`
   objects. Each `VarLenFeature` and `SparseFeature` is mapped to a
   `SparseTensor`; each `FixedLenFeature` is mapped to a `Tensor`; and each
   `RaggedFeature` is mapped to a `RaggedTensor`.
@@ -286,7 +281,7 @@ def parse_example_v2(serialized, features, example_names=None, name=None):
   Args:
     serialized: A vector (1-D Tensor) of strings, a batch of binary
       serialized `Example` protos.
-    features: A `dict` mapping feature keys to `FixedLenFeature`,
+    features: A mapping of feature keys to `FixedLenFeature`,
       `VarLenFeature`, `SparseFeature`, and `RaggedFeature` values.
     example_names: A vector (1-D Tensor) of strings (optional), the names of
       the serialized protos in the batch.
@@ -300,7 +295,8 @@ def parse_example_v2(serialized, features, example_names=None, name=None):
     ValueError: if any feature is invalid.
   """
   if not features:
-    raise ValueError("Argument `features` cannot be None.")
+    raise ValueError(
+        "Argument `features` cannot be None or falsy. Got %s" % features)
   features = _prepend_none_dimension(features)
   params = _ParseOpParams.from_features(features, [
       VarLenFeature, SparseFeature, FixedLenFeature, FixedLenSequenceFeature,
@@ -392,7 +388,7 @@ def parse_single_example(serialized, features, name=None, example_names=None):
 
   Args:
     serialized: A scalar string Tensor, a single serialized Example.
-    features: A `dict` mapping feature keys to `FixedLenFeature` or
+    features: A mapping of feature keys to `FixedLenFeature` or
       `VarLenFeature` values.
     name: A name for this operation (optional).
     example_names: (Optional) A scalar string Tensor, the associated name.
@@ -429,7 +425,7 @@ def parse_single_example_v2(
 
   Args:
     serialized: A scalar string Tensor, a single serialized Example.
-    features: A `dict` mapping feature keys to `FixedLenFeature` or
+    features: A mapping of feature keys to `FixedLenFeature` or
       `VarLenFeature` values.
     example_names: (Optional) A scalar string Tensor, the associated name.
     name: A name for this operation (optional).
@@ -440,8 +436,10 @@ def parse_single_example_v2(
   Raises:
     ValueError: if any feature is invalid.
   """
-  if not features:
+  if features is None:
     raise ValueError("Invalid argument: features cannot be None.")
+  if not features:
+    raise ValueError("Invalid argument: features cannot be empty.")
   with ops.name_scope(name, "ParseSingleExample", [serialized, example_names]):
     serialized = ops.convert_to_tensor(serialized, name="serialized")
     serialized = _assert_scalar(serialized, "serialized")
@@ -524,10 +522,10 @@ def parse_sequence_example(serialized,
   Args:
     serialized: A vector (1-D Tensor) of type string containing binary
       serialized `SequenceExample` protos.
-    context_features: A `dict` mapping feature keys to `FixedLenFeature` or
+    context_features: A mapping of feature keys to `FixedLenFeature` or
       `VarLenFeature` or `RaggedFeature` values. These features are associated
       with a `SequenceExample` as a whole.
-    sequence_features: A `dict` mapping feature keys to
+    sequence_features: A mapping of feature keys to
       `FixedLenSequenceFeature` or `VarLenFeature` or `RaggedFeature` values.
       These features are associated with data within the `FeatureList` section
       of the `SequenceExample` proto.
@@ -758,10 +756,10 @@ def parse_single_sequence_example(
   Args:
     serialized: A scalar (0-D Tensor) of type string, a single binary
       serialized `SequenceExample` proto.
-    context_features: A `dict` mapping feature keys to `FixedLenFeature` or
+    context_features: A mapping of feature keys to `FixedLenFeature` or
       `VarLenFeature` or `RaggedFeature` values. These features are associated
       with a `SequenceExample` as a whole.
-    sequence_features: A `dict` mapping feature keys to
+    sequence_features: A mapping of feature keys to
       `FixedLenSequenceFeature` or `VarLenFeature` or `RaggedFeature` values.
       These features are associated with data within the `FeatureList` section
       of the `SequenceExample` proto.
@@ -865,13 +863,13 @@ def decode_raw(input_bytes,
 
   This is because each byte in the input is converted to a new value on the
   output (if output type is `uint8` or `int8`, otherwise chunks of inputs get
-  coverted to a new value):
+  converted to a new value):
 
   >>> tf.io.decode_raw(tf.constant("123"), tf.uint8)
   <tf.Tensor: shape=(3,), dtype=uint8, numpy=array([49, 50, 51], dtype=uint8)>
   >>> tf.io.decode_raw(tf.constant("1234"), tf.uint8)
   <tf.Tensor: shape=(4,), dtype=uint8, numpy=array([49, 50, 51, 52], ...
-  >>> # chuncked output
+  >>> # chunked output
   >>> tf.io.decode_raw(tf.constant("12"), tf.uint16)
   <tf.Tensor: shape=(1,), dtype=uint16, numpy=array([12849], dtype=uint16)>
   >>> tf.io.decode_raw(tf.constant("1234"), tf.uint16)
@@ -938,23 +936,16 @@ def decode_raw(input_bytes,
          [14136, 13622, 13108, 12594]], dtype=int16)>
 
   Args:
-    input_bytes:
-      Each element of the input Tensor is converted to an array of bytes.
-
-      Currently, this must be a tensor of strings (bytes), although semantically
-      the operation should support any input.
-    out_type:
-      `DType` of the output. Acceptable types are `half`, `float`, `double`,
-      `int32`, `uint16`, `uint8`, `int16`, `int8`, `int64`.
-    little_endian:
-      Whether the `input_bytes` data is in little-endian format. Data will be
-      converted into host byte order if necessary.
-    fixed_length:
-      If set, the first `fixed_length` bytes of each element will be converted.
-      Data will be zero-padded or truncated to the specified length.
-
+    input_bytes: Each element of the input Tensor is converted to an array of
+      bytes.  Currently, this must be a tensor of strings (bytes), although
+      semantically the operation should support any input.
+    out_type: `DType` of the output. Acceptable types are `half`, `float`,
+      `double`, `int32`, `uint16`, `uint8`, `int16`, `int8`, `int64`.
+    little_endian: Whether the `input_bytes` data is in little-endian format.
+      Data will be converted into host byte order if necessary.
+    fixed_length: If set, the first `fixed_length` bytes of each element will be
+      converted. Data will be zero-padded or truncated to the specified length.
       `fixed_length` must be a multiple of the size of `out_type`.
-
       `fixed_length` must be specified if the elements of `input_bytes` are of
       variable length.
     name: A name for the operation (optional).
@@ -1036,24 +1027,22 @@ def decode_csv(records,
   Note that we allow leading and trailing spaces with int or float field.
 
   Args:
-    records: A `Tensor` of type `string`.
-      Each string is a record/row in the csv and all records should have
-      the same format.
-    record_defaults: A list of `Tensor` objects with specific types.
-      Acceptable types are `float32`, `float64`, `int32`, `int64`, `string`.
-      One tensor per column of the input record, with either a
-      scalar default value for that column or an empty vector if the column is
-      required.
-    field_delim: An optional `string`. Defaults to `","`.
-      char delimiter to separate fields in a record.
-    use_quote_delim: An optional `bool`. Defaults to `True`.
-      If false, treats double quotation marks as regular
-      characters inside of the string fields (ignoring RFC 4180, Section 2,
-      Bullet 5).
+    records: A `Tensor` of type `string`. Each string is a record/row in the csv
+      and all records should have the same format.
+    record_defaults: A list of `Tensor` objects with specific types. Acceptable
+      types are `float32`, `float64`, `int32`, `int64`, `string`. One tensor per
+      column of the input record, with either a scalar default value for that
+      column or an empty vector if the column is required.
+    field_delim: An optional `string`. Defaults to `","`. char delimiter to
+      separate fields in a record.
+    use_quote_delim: An optional `bool`. Defaults to `True`. If false, treats
+      double quotation marks as regular characters inside of the string fields
+      (ignoring RFC 4180, Section 2, Bullet 5).
     name: A name for the operation (optional).
     na_value: Additional string to recognize as NA/NaN.
     select_cols: Optional sorted list of column indices to select. If specified,
-      only this subset of columns will be parsed and returned.
+      only this subset of columns will be parsed and returned. It only works on
+      `records` except for `record_defaults`.
 
   Returns:
     A list of `Tensor` objects. Has the same type as `record_defaults`.
@@ -1085,23 +1074,21 @@ def decode_csv_v2(records,
   Note that we allow leading and trailing spaces with int or float field.
 
   Args:
-    records: A `Tensor` of type `string`.
-      Each string is a record/row in the csv and all records should have
-      the same format.
-    record_defaults: A list of `Tensor` objects with specific types.
-      Acceptable types are `float32`, `float64`, `int32`, `int64`, `string`.
-      One tensor per column of the input record, with either a
-      scalar default value for that column or an empty vector if the column is
-      required.
-    field_delim: An optional `string`. Defaults to `","`.
-      char delimiter to separate fields in a record.
-    use_quote_delim: An optional `bool`. Defaults to `True`.
-      If false, treats double quotation marks as regular
-      characters inside of the string fields (ignoring RFC 4180, Section 2,
-      Bullet 5).
+    records: A `Tensor` of type `string`. Each string is a record/row in the csv
+      and all records should have the same format.
+    record_defaults: A list of `Tensor` objects with specific types. Acceptable
+      types are `float32`, `float64`, `int32`, `int64`, `string`. One tensor per
+      column of the input record, with either a scalar default value for that
+      column or an empty vector if the column is required.
+    field_delim: An optional `string`. Defaults to `","`. char delimiter to
+      separate fields in a record.
+    use_quote_delim: An optional `bool`. Defaults to `True`. If false, treats
+      double quotation marks as regular characters inside of the string fields
+      (ignoring RFC 4180, Section 2, Bullet 5).
     na_value: Additional string to recognize as NA/NaN.
     select_cols: Optional sorted list of column indices to select. If specified,
-      only this subset of columns will be parsed and returned.
+      only this subset of columns will be parsed and returned. It only works on
+      `records` except for `record_defaults`.
     name: A name for the operation (optional).
 
   Returns:
@@ -1133,7 +1120,7 @@ def _assert_scalar(value, name):
   """Asserts that `value` is scalar, and returns `value`."""
   value_rank = value.shape.rank
   if value_rank is None:
-    check = control_flow_ops.Assert(
+    check = control_flow_assert.Assert(
         math_ops.equal(array_ops.rank(value), 0),
         ["Input %s must be a scalar" % name],
         name="%sIsScalar" % name.capitalize())

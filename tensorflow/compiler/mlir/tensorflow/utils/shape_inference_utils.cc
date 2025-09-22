@@ -15,8 +15,15 @@ limitations under the License.
 
 #include "tensorflow/compiler/mlir/tensorflow/utils/shape_inference_utils.h"
 
+#include <optional>
+
+#include "mlir/IR/Location.h"  // from @llvm-project
+#include "mlir/Interfaces/InferTypeOpInterface.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
-#include "tensorflow/compiler/mlir/tensorflow/translate/export_tf_dialect_op.h"
+#include "tensorflow/compiler/mlir/tensorflow/utils/translate_utils.h"
+#include "tensorflow/core/ir/utils/shape_inference_utils.h"
 
 #define DEBUG_TYPE "tf-shape-inference-utils"
 
@@ -24,7 +31,7 @@ namespace mlir {
 namespace TF {
 
 LogicalResult InferReturnTypeComponentsForTFOp(
-    Optional<Location> location, Operation* op, int64_t graph_version,
+    std::optional<Location> location, Operation* op, int64_t graph_version,
     tfg::OperandAsConstantFn operand_as_constant_fn,
     tfg::OpResultAsShapeFn op_result_as_shape_fn,
     tfg::ResultElementTypeFn result_element_type_fn,

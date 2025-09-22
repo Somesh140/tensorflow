@@ -17,7 +17,8 @@ limitations under the License.
 
 #include <cstddef>
 #include <map>
-#include <set>
+#include <memory>
+#include <vector>
 
 #include "llvm/ADT/DenseMap.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
@@ -36,13 +37,15 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_saved_model.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/savedmodel_passes_detail.h"
 
 namespace mlir {
 namespace tf_saved_model {
 namespace {
+
+#define GEN_PASS_DEF_OPTIMIZEGLOBALTENSORSPASS
+#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_savedmodel_passes.h.inc"
 struct OptimizeGlobalTensorsPass
-    : public OptimizeGlobalTensorsPassBase<OptimizeGlobalTensorsPass> {
+    : public impl::OptimizeGlobalTensorsPassBase<OptimizeGlobalTensorsPass> {
   void runOnOperation() override;
 };
 
@@ -61,7 +64,7 @@ bool IsImmutable(GlobalTensorOp global_tensor,
                  ArrayRef<GlobalTensorUse> global_tensor_uses,
                  const TF::ResourceAnalyzer& resource_analyzer) {
   // Global tensor is already known to be immutable.
-  if (!global_tensor.is_mutable()) {
+  if (!global_tensor.getIsMutable()) {
     return false;
   }
   // An exported global tensor that is not already known to be immutable might
@@ -92,7 +95,7 @@ GlobalTensorUsesMap CreateGlobalTensorUsesMap(ModuleOp module) {
         continue;
       }
       auto global_tensor = symbol_table.lookup<GlobalTensorOp>(
-          sym.cast<FlatSymbolRefAttr>().getValue());
+          mlir::cast<FlatSymbolRefAttr>(sym).getValue());
       if (!global_tensor) {
         continue;
       }
@@ -134,7 +137,7 @@ void EraseUnusedGlobalTensors(ModuleOp module,
   }
 }
 
-void EraseUnusedBoundInputs(ModuleOp module) {
+LogicalResult EraseUnusedBoundInputs(ModuleOp module) {
   for (auto func : module.getOps<func::FuncOp>()) {
     llvm::BitVector args_to_erase(func.getNumArguments());
     for (int i = 0, e = func.getNumArguments(); i < e; i++) {
@@ -143,8 +146,12 @@ void EraseUnusedBoundInputs(ModuleOp module) {
         args_to_erase.set(i);
       }
     }
-    func.eraseArguments(args_to_erase);
+
+    if (failed(func.eraseArguments(args_to_erase))) {
+      return failure();
+    }
   }
+  return success();
 }
 
 void OptimizeGlobalTensorsPass::runOnOperation() {
@@ -153,7 +160,9 @@ void OptimizeGlobalTensorsPass::runOnOperation() {
     return;
   }
 
-  EraseUnusedBoundInputs(module);
+  if (failed(EraseUnusedBoundInputs(module))) {
+    return signalPassFailure();
+  }
 
   TF::ResourceAnalyzer resource_analyzer(module);
 

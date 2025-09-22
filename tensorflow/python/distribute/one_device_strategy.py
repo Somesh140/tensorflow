@@ -25,6 +25,7 @@ from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
+from tensorflow.python.ops import while_loop
 from tensorflow.python.util import nest
 from tensorflow.python.util.tf_export import tf_export
 
@@ -238,9 +239,10 @@ class OneDeviceStrategy(distribute_lib.Strategy):
 @tf_export(v1=["distribute.OneDeviceStrategy"])  # pylint: disable=empty-docstring
 class OneDeviceStrategyV1(distribute_lib.StrategyV1):
 
-  __doc__ = OneDeviceStrategy.__doc__.replace(
+  __doc__ = (OneDeviceStrategy.__doc__ or "").replace(
       "For example:\n  ```",
-      "For example:\n  ```\n  tf.enable_eager_execution()")
+      "For example:\n  ```\n  tf.enable_eager_execution()",
+  )
 
   def __init__(self, device):
     super(OneDeviceStrategyV1, self).__init__(OneDeviceExtended(self, device))
@@ -371,9 +373,13 @@ class OneDeviceExtended(distribute_lib.StrategyExtendedV1):
     # TODO(priyag): Use max_iterations instead of an explicit counter.
     cond = lambda i, *args: i < iterations
     i = constant_op.constant(0)
-    loop_result = control_flow_ops.while_loop(
-        cond, body, [i] + initial_loop_values, name="",
-        parallel_iterations=1, back_prop=False, swap_memory=False,
+    loop_result = while_loop.while_loop(
+        cond,
+        body, [i] + initial_loop_values,
+        name="",
+        parallel_iterations=1,
+        back_prop=False,
+        swap_memory=False,
         return_same_structure=True)
     del self._outer_control_flow_context
 

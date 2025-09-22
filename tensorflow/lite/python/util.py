@@ -19,12 +19,10 @@ import datetime
 import sys
 
 from absl import logging
-import six
-from six.moves import range
-
 import flatbuffers
+import numpy as np
+
 from tensorflow.core.protobuf import config_pb2 as _config_pb2
-from tensorflow.core.protobuf import graph_debug_info_pb2
 from tensorflow.core.protobuf import meta_graph_pb2 as _meta_graph_pb2
 from tensorflow.lite.python import conversion_metadata_schema_py_generated as conversion_metadata_fb
 from tensorflow.lite.python import schema_py_generated as schema_fb
@@ -37,7 +35,6 @@ from tensorflow.python.eager import function
 from tensorflow.python.framework import convert_to_constants as _convert_to_constants
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import error_interpolation as _error_interpolation
-from tensorflow.python.framework import graph_util as tf_graph_util
 from tensorflow.python.grappler import tf_optimizer
 from tensorflow.python.training.saver import export_meta_graph as _export_meta_graph
 
@@ -47,14 +44,15 @@ CONVERSION_METADATA_FIELD_NAME = "CONVERSION_METADATA"
 # Keras functions used by TFLite
 model_input_signature = _tflite_keras_util.model_input_signature
 trace_model_call = _tflite_keras_util.trace_model_call
+get_save_spec = _tflite_keras_util.get_save_spec
 
 # Jax functions used by TFLite
 # pylint: disable=g-import-not-at-top
 # pylint: disable=unused-import
 try:
-  from jax import xla_computation as _xla_computation
+  from jax import jit as _jit
 except ImportError:
-  _xla_computation = None
+  _jit = None
 # pylint: enable=g-import-not-at-top
 # pylint: enable=unused-import
 
@@ -117,7 +115,7 @@ def get_tensor_name(tensor):
   Returns:
     str
   """
-  parts = six.ensure_str(tensor.name).split(":")
+  parts = tensor.name.split(":")
   if len(parts) > 2:
     raise ValueError("Tensor name invalid. Expect 0 or 1 colon, got {0}".format(
         len(parts) - 1))
@@ -153,7 +151,7 @@ def get_tensors_from_tensor_names(graph, tensor_names):
   tensors = []
   invalid_tensors = []
   for name in tensor_names:
-    if not isinstance(name, six.string_types):
+    if not isinstance(name, str):
       raise ValueError("Invalid type for a tensor name in the provided graph. "
                        "Expected type for a tensor name is 'str', instead got "
                        "type '{}' for tensor name '{}'".format(
@@ -176,7 +174,7 @@ def set_tensor_shapes(tensors, shapes):
   """Sets Tensor shape for each tensor if the shape is defined.
 
   Args:
-    tensors: TensorFlow ops.Tensor.
+    tensors: TensorFlow tensor.Tensor.
     shapes: Dict of strings representing input tensor names to list of
       integers representing input shapes (e.g., {"foo": : [1, 16, 16, 3]}).
 
@@ -266,7 +264,7 @@ def _convert_op_hints_if_present(sess, graph_def, output_tensors,
   if is_frozen_graph(sess):
     raise ValueError("Try to convert op hints, needs unfrozen graph.")
   output_arrays = [get_tensor_name(tensor) for tensor in output_tensors]
-  graph_def = tf_graph_util.convert_variables_to_constants(
+  graph_def = _convert_to_constants.convert_variables_to_constants(
       sess, graph_def, output_arrays + hinted_outputs_nodes)
   graph_def = convert_op_hints_to_stubs(graph_def=graph_def)
   return graph_def
@@ -306,8 +304,9 @@ def freeze_graph(sess, input_tensors, output_tensors):
 
   if not is_frozen_graph(sess):
     output_node_names = [tensor.name.split(":")[0] for tensor in output_tensors]
-    return tf_graph_util.convert_variables_to_constants(sess, graph_def,
-                                                        output_node_names)
+    return _convert_to_constants.convert_variables_to_constants(
+        sess, graph_def, output_node_names
+    )
   else:
     return sess.graph_def
 
@@ -325,8 +324,7 @@ def is_frozen_graph(sess):
     Bool.
   """
   for op in sess.graph.get_operations():
-    if six.ensure_str(op.type).startswith("Variable") or six.ensure_str(
-        op.type).endswith("VariableOp"):
+    if op.type.startswith("Variable") or op.type.endswith("VariableOp"):
       return False
   return True
 
@@ -354,7 +352,7 @@ def build_debug_info_func(original_graph):
           useful_ops.append((func, original_graph.get_operation_by_name(name)))
         else:
           sub_func = original_graph._get_function(func)  # pylint: disable=protected-access
-          if isinstance(sub_func, function._EagerDefinedFunction):  # pylint: disable=protected-access
+          if isinstance(sub_func, function.AtomicFunction):  # pylint: disable=protected-access
             useful_ops.append(
                 (func, sub_func.graph.get_operation_by_name(name)))
           else:
@@ -383,18 +381,8 @@ def convert_debug_info_func(saved_debug_info):
 
   def f(original_nodes):
     """Function to create `GraphDebugInfo` for the given `original_nodes`."""
-    if not saved_debug_info:
-      return None
-
-    output_debug_info = graph_debug_info_pb2.GraphDebugInfo()
-    # All the files are copied over, so the index wouldn't be changed.
-    output_debug_info.files[:] = saved_debug_info.files
-    # We only copy over the debug info for the input nodes
-    for func, node in original_nodes:
-      debug_key = node + "@" + func
-      output_debug_info.traces[debug_key].CopyFrom(
-          saved_debug_info.traces[debug_key])
-    return output_debug_info
+    del original_nodes
+    return saved_debug_info
 
   return f
 
@@ -924,8 +912,15 @@ def _remove_redundant_quantize_ops_per_subgraph(model, subgraph_index,
         for output in signature_def.outputs:
           if output.tensorIndex == op.outputs[0]:
             output.tensorIndex = op.inputs[0]
+      deleted_tensor = requantize_op.inputs[0]
       # Reset the input of the requantize op to the float input
       requantize_op.inputs[0] = op.inputs[0]
+      # Migrate other operator users to output tensor of requantize op
+      for op_user in operators:
+        if deleted_tensor in op_user.inputs and op_user != requantize_op:
+          for idx, input_tensor in enumerate(op_user.inputs):
+            if input_tensor == deleted_tensor:
+              op_user.inputs[idx] = requantize_op.outputs[0]
       operators.remove(op)
 
   # Remove all the quant ops which connect to the output dequant op.
@@ -1005,7 +1000,7 @@ def get_sparsity_modes(model_object):
 
       # Block map is the list if indexes where the block size is larger than 1.
       # So empty block map means it is random sparsity.
-      if not tensor.sparsity.blockMap:
+      if tensor.sparsity.blockMap.size == 0 or not tensor.sparsity.blockMap:
         result.add(
             conversion_metadata_fb.ModelOptimizationMode.RANDOM_SPARSITY)
       else:
@@ -1013,6 +1008,109 @@ def get_sparsity_modes(model_object):
             conversion_metadata_fb.ModelOptimizationMode.BLOCK_SPARSITY)
 
   return list(result)
+
+
+def get_model_hash(model):
+  """Calculate a 64-bit integer hash for a TensorFlow Lite model based on its structure.
+
+  Args:
+      model: A TensorFlow Lite model object.
+
+  Returns:
+      int: A 64-bit integer hash value representing the model structure.
+  """
+  # TODO(b/344872922): Move the hashing implementation to C++ layer since not
+  # all calls to the converter come via the Python API.
+  hash_value = 0
+
+  for subgraph in model.subgraphs:
+    if subgraph.operators is not None:
+      hash_value = update_hash_with_primitive_value(
+          hash_value, len(subgraph.operators)
+      )
+
+      for operator in subgraph.operators:
+        if operator.inputs is not None:
+          hash_value = update_hash_with_array(hash_value, operator.inputs)
+
+        if operator.outputs is not None:
+          hash_value = update_hash_with_array(hash_value, operator.outputs)
+
+    if subgraph.tensors is not None:
+      hash_value = update_hash_with_primitive_value(
+          hash_value, len(subgraph.tensors)
+      )
+
+      for tensor in subgraph.tensors:
+        if tensor.buffer is not None:
+          buffer = model.buffers[tensor.buffer]
+          if buffer.data is not None:
+            hash_value = update_hash_with_primitive_value(
+                hash_value, len(buffer.data)
+            )
+
+        if tensor.shape is not None:
+          hash_value = update_hash_with_array(hash_value, tensor.shape)
+
+    if subgraph.inputs is not None:
+      hash_value = update_hash_with_primitive_value(
+          hash_value, len(subgraph.inputs)
+      )
+
+    if subgraph.outputs is not None:
+      hash_value = update_hash_with_primitive_value(
+          hash_value, len(subgraph.outputs)
+      )
+
+  return hash_value
+
+
+def update_hash_with_primitive_value(hash_value, value):
+  """Update the hash value using a primitive value.
+
+  Args:
+      hash_value (uint64): The current hash value.
+      value: The primitive value to incorporate into the hash.
+
+  Returns:
+      int: The updated hash value.
+  """
+  hash_const = np.uint64(0x9E3779B97F4A7800)
+  hash_value = np.uint64(hash_value)
+  value = np.uint64(value)
+
+  # Convert to arrays before shifting.
+  hash_value = np.array([hash_value])
+  value = np.array([value])
+
+  # Shift the values, then take the value from the first index.
+  hash_value = np.bitwise_xor(
+      hash_value,
+      (
+          value
+          + hash_const
+          + np.left_shift(hash_value, 10)
+          + np.right_shift(hash_value, 4)
+      ),
+  )[0]
+
+  return hash_value
+
+
+def update_hash_with_array(hash_value, int_array):
+  """Update the hash value using a TFLite int array.
+
+  Args:
+      hash_value (int): The current hash value.
+      int_array: A TFLite int array to incorporate into the hash.
+
+  Returns:
+      int: The updated hash value.
+  """
+  if int_array is not None:
+    for i in int_array:
+      hash_value = update_hash_with_primitive_value(hash_value, i)
+  return hash_value
 
 
 def populate_conversion_metadata(model_object, metadata):
@@ -1072,6 +1170,8 @@ def get_conversion_metadata(model_buffer):
       metadata_buf = model_object.buffers[meta.buffer].data.tobytes()
       return conversion_metadata_fb.ConversionMetadataT.InitFromObj(
           conversion_metadata_fb.ConversionMetadata.GetRootAsConversionMetadata(
-              metadata_buf, 0))
+              metadata_buf, 0
+          )
+      )
 
   return None

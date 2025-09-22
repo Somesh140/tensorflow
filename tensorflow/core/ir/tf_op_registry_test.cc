@@ -17,12 +17,13 @@ limitations under the License.
 
 #include <string>
 
-#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/IR/OwningOpRef.h"  // from @llvm-project
 #include "mlir/Parser/Parser.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/core/ir/dialect.h"
 #include "tensorflow/core/ir/interfaces.h"
 #include "tensorflow/core/ir/ops.h"
@@ -56,7 +57,7 @@ TEST(TensorFlowOpRegistryInterface, TestIntrinsicOps) {
   ASSERT_TRUE(module);
 
   auto func_op = cast<GraphFuncOp>(&module->front());
-  auto ret_op = cast<ReturnOp>(func_op.body().front().getTerminator());
+  auto ret_op = cast<ReturnOp>(func_op.getBody().front().getTerminator());
   EXPECT_FALSE(dyn_cast<TensorFlowRegistryInterface>(*func_op));
   EXPECT_FALSE(dyn_cast<TensorFlowRegistryInterface>(*ret_op));
 }
@@ -75,7 +76,8 @@ TEST(TensorFlowOpRegistryInterface, TestStatelessTFOps) {
       mlir::parseSourceString<mlir::ModuleOp>(code, &context);
   ASSERT_TRUE(module);
 
-  Operation *add = &cast<GraphFuncOp>(&module->front()).body().front().front();
+  Operation *add =
+      &cast<GraphFuncOp>(&module->front()).getBody().front().front();
   auto iface = dyn_cast<TensorFlowRegistryInterface>(add);
   ASSERT_TRUE(iface);
   EXPECT_FALSE(iface.isStateful());
@@ -102,7 +104,7 @@ TEST(TensorFlowOpRegistryInterface, TestStatelessAndStatefulRegionOps) {
     ASSERT_TRUE(module);
 
     Operation *case_op =
-        &cast<GraphFuncOp>(&module->front()).body().front().front();
+        &cast<GraphFuncOp>(&module->front()).getBody().front().front();
     auto iface = dyn_cast<TensorFlowRegistryInterface>(case_op);
     ASSERT_TRUE(iface);
     EXPECT_EQ(iface.isStateful(), std::get<1>(it));

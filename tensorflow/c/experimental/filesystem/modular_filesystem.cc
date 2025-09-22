@@ -14,15 +14,32 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/c/experimental/filesystem/modular_filesystem.h"
 
-#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/log/check.h"
+#include "tensorflow/c/experimental/filesystem/filesystem_interface.h"
 #include "tensorflow/c/experimental/filesystem/modular_filesystem_registration.h"
+#include "tensorflow/c/tf_file_statistics.h"
+#include "tensorflow/c/tf_status.h"
 #include "tensorflow/c/tf_status_helper.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/file_system.h"
 #include "tensorflow/core/platform/env.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/file_statistics.h"
+#include "tensorflow/core/platform/file_system.h"
 #include "tensorflow/core/platform/file_system_helper.h"
-#include "tensorflow/core/util/ptr_util.h"
+#include "tensorflow/core/platform/status.h"
+#include "tensorflow/core/platform/strcat.h"
+#include "tensorflow/core/platform/stringpiece.h"
+#include "tensorflow/core/platform/types.h"
 
 // TODO(b/139060984): After all filesystems are converted, all calls to
 // methods from `FileSystem` will have to be replaced to calls to private
@@ -42,13 +59,13 @@ Status ModularFileSystem::NewRandomAccessFile(
         "Filesystem for ", fname, " does not support NewRandomAccessFile()"));
 
   UniquePtrTo_TF_Status plugin_status(TF_NewStatus(), TF_DeleteStatus);
-  auto file = MakeUnique<TF_RandomAccessFile>();
+  auto file = std::make_unique<TF_RandomAccessFile>();
   std::string translated_name = TranslateName(fname);
   ops_->new_random_access_file(filesystem_.get(), translated_name.c_str(),
                                file.get(), plugin_status.get());
 
   if (TF_GetCode(plugin_status.get()) == TF_OK)
-    *result = MakeUnique<ModularRandomAccessFile>(
+    *result = std::make_unique<ModularRandomAccessFile>(
         translated_name, std::move(file), random_access_file_ops_.get());
 
   return StatusFromTF_Status(plugin_status.get());
@@ -62,14 +79,14 @@ Status ModularFileSystem::NewWritableFile(
         "Filesystem for ", fname, " does not support NewWritableFile()"));
 
   UniquePtrTo_TF_Status plugin_status(TF_NewStatus(), TF_DeleteStatus);
-  auto file = MakeUnique<TF_WritableFile>();
+  auto file = std::make_unique<TF_WritableFile>();
   std::string translated_name = TranslateName(fname);
   ops_->new_writable_file(filesystem_.get(), translated_name.c_str(),
                           file.get(), plugin_status.get());
 
   if (TF_GetCode(plugin_status.get()) == TF_OK)
-    *result = MakeUnique<ModularWritableFile>(translated_name, std::move(file),
-                                              writable_file_ops_.get());
+    *result = std::make_unique<ModularWritableFile>(
+        translated_name, std::move(file), writable_file_ops_.get());
 
   return StatusFromTF_Status(plugin_status.get());
 }
@@ -82,14 +99,14 @@ Status ModularFileSystem::NewAppendableFile(
         "Filesystem for ", fname, " does not support NewAppendableFile()"));
 
   UniquePtrTo_TF_Status plugin_status(TF_NewStatus(), TF_DeleteStatus);
-  auto file = MakeUnique<TF_WritableFile>();
+  auto file = std::make_unique<TF_WritableFile>();
   std::string translated_name = TranslateName(fname);
   ops_->new_appendable_file(filesystem_.get(), translated_name.c_str(),
                             file.get(), plugin_status.get());
 
   if (TF_GetCode(plugin_status.get()) == TF_OK)
-    *result = MakeUnique<ModularWritableFile>(translated_name, std::move(file),
-                                              writable_file_ops_.get());
+    *result = std::make_unique<ModularWritableFile>(
+        translated_name, std::move(file), writable_file_ops_.get());
 
   return StatusFromTF_Status(plugin_status.get());
 }
@@ -103,14 +120,14 @@ Status ModularFileSystem::NewReadOnlyMemoryRegionFromFile(
         " does not support NewReadOnlyMemoryRegionFromFile()"));
 
   UniquePtrTo_TF_Status plugin_status(TF_NewStatus(), TF_DeleteStatus);
-  auto region = MakeUnique<TF_ReadOnlyMemoryRegion>();
+  auto region = std::make_unique<TF_ReadOnlyMemoryRegion>();
   std::string translated_name = TranslateName(fname);
   ops_->new_read_only_memory_region_from_file(
       filesystem_.get(), translated_name.c_str(), region.get(),
       plugin_status.get());
 
   if (TF_GetCode(plugin_status.get()) == TF_OK)
-    *result = MakeUnique<ModularReadOnlyMemoryRegion>(
+    *result = std::make_unique<ModularReadOnlyMemoryRegion>(
         std::move(region), read_only_memory_region_ops_.get());
 
   return StatusFromTF_Status(plugin_status.get());
@@ -561,8 +578,9 @@ Status RegisterFilesystemPlugin(const std::string& dso_path) {
 
   // Step 2: Load symbol for `TF_InitPlugin`
   void* dso_symbol;
-  TF_RETURN_IF_ERROR(
-      env->GetSymbolFromLibrary(dso_handle, "TF_InitPlugin", &dso_symbol));
+  TF_RETURN_WITH_CONTEXT_IF_ERROR(
+      env->GetSymbolFromLibrary(dso_handle, "TF_InitPlugin", &dso_symbol),
+      "Failed to load TF_InitPlugin symbol for DSO: ", dso_path);
 
   // Step 3: Call `TF_InitPlugin`
   TF_FilesystemPluginInfo info;

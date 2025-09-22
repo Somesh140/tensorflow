@@ -14,9 +14,7 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/compiler/mlir/tensorflow/transforms/mark_initialized_variables.h"
 
-#include <string>
-#include <vector>
-
+#include "absl/strings/str_cat.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/Block.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
@@ -30,6 +28,7 @@ limitations under the License.
 #include "tensorflow/core/framework/rendezvous.h"
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/public/session.h"
 
 namespace mlir {
@@ -56,8 +55,8 @@ LogicalResult MarkInitializedVariablesInFunction(func::FuncOp function,
   const tensorflow::DeviceMgr* mgr = nullptr;
   auto status = session->LocalDeviceManager(&mgr);
   if (!status.ok())
-    return function->emitError("failed to fetch device manager: " +
-                               status.error_message());
+    return function->emitError(
+        absl::StrCat("failed to fetch device manager: ", status.message()));
 
   // Fetch all varHandleOp in the function.
   llvm::SmallVector<TF::VarHandleOp, 4> var_ops;

@@ -28,6 +28,7 @@ import opt_einsum
 
 from tensorflow.compiler.tf2xla.ops import gen_xla_ops
 from tensorflow.python.framework import ops
+from tensorflow.python.framework import tensor as tensor_lib
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
@@ -846,7 +847,7 @@ def _einsum_v1_parse_and_resolve_equation(equation, input_shapes):
       tensor, filling in missing output subscripts and broadcast axes.
 
   Raises:
-    ValueError: If equation is in the uncorrect format, incorrect number of
+    ValueError: If equation is in the incorrect format, incorrect number of
       inputs given or broadcast axes "..." or output axes could not be resolved.
   """
   equation = equation.replace(' ', '')
@@ -1060,7 +1061,7 @@ def _reshape_if_necessary(tensor, new_shape):
   new_shape = tuple(-1 if x is None else x for x in new_shape)
   cur_shape = tuple(x.value for x in tensor.shape.dims)
   if (len(new_shape) == len(cur_shape) and
-      all(not isinstance(d1, ops.Tensor) and (d0 == d1 or d1 == -1)
+      all(not isinstance(d1, tensor_lib.Tensor) and (d0 == d1 or d1 == -1)
           for d0, d1 in zip(cur_shape, new_shape))):
     return tensor
   else:

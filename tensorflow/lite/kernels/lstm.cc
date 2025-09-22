@@ -21,14 +21,14 @@ limitations under the License.
 #include <memory>
 #include <vector>
 
-#include "tensorflow/lite/c/builtin_op_data.h"
-#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/core/c/builtin_op_data.h"
+#include "tensorflow/lite/core/c/common.h"
 #include "tensorflow/lite/kernels/cpu_backend_context.h"
 #include "tensorflow/lite/kernels/internal/compatibility.h"
-#include "tensorflow/lite/kernels/internal/kernel_utils.h"
 #include "tensorflow/lite/kernels/internal/optimized/optimized_ops.h"
+#include "tensorflow/lite/kernels/internal/portable_tensor_utils.h"
 #include "tensorflow/lite/kernels/internal/quantization_util.h"
-#include "tensorflow/lite/kernels/internal/tensor.h"
+#include "tensorflow/lite/kernels/internal/runtime_shape.h"
 #include "tensorflow/lite/kernels/internal/tensor_ctypes.h"
 #include "tensorflow/lite/kernels/internal/tensor_utils.h"
 #include "tensorflow/lite/kernels/internal/types.h"
@@ -95,6 +95,7 @@ constexpr int kProjectionWeightsLedgerOffset = 8;
 TfLiteStatus make_ledger(const TfLiteSparsity* sparsity, TfLiteContext* context,
                          TfLiteTensor* ledger) {
   ledger->type = kTfLiteUInt8;
+  ledger->name = "Lstm_ledger";
   ledger->allocation_type = kTfLiteArenaRwPersistent;
   if (sparsity == nullptr) {
     return kTfLiteOk;
@@ -981,7 +982,7 @@ TfLiteStatus CheckInputTensorDimensions(TfLiteContext* context,
   const TfLiteTensor* input_gate_bias =
       GetOptionalInputTensor(context, node, kInputGateBiasTensor);
   if (use_cifg) {
-    TF_LITE_ENSURE_EQ(context, input_gate_bias, nullptr);
+    TF_LITE_ENSURE(context, input_gate_bias == nullptr);
   } else {
     TF_LITE_ENSURE_EQ(context, input_gate_bias->dims->size, 1);
     TF_LITE_ENSURE_EQ(context, input_gate_bias->dims->data[0], n_cell);
@@ -1060,7 +1061,7 @@ TfLiteStatus CheckInputTensorDimensions(TfLiteContext* context,
     const TfLiteTensor* input_layer_norm_coefficients = GetOptionalInputTensor(
         context, node, kInputLayerNormCoefficientsTensor);
     if (use_cifg) {
-      TF_LITE_ENSURE_EQ(context, input_layer_norm_coefficients, nullptr);
+      TF_LITE_ENSURE(context, input_layer_norm_coefficients == nullptr);
     } else {
       TF_LITE_ENSURE(context, input_layer_norm_coefficients != nullptr);
       TF_LITE_ENSURE_EQ(context, input_layer_norm_coefficients->dims->size, 1);
@@ -1611,6 +1612,7 @@ TfLiteStatus Prepare(TfLiteContext* context, TfLiteNode* node) {
     TF_LITE_ENSURE_OK(context,
                       GetTemporarySafe(context, node, kRowSums, &row_sums));
     row_sums->type = kTfLiteInt32;
+    row_sums->name = "Lstm_row_sums";
     row_sums->allocation_type = kTfLiteArenaRwPersistent;
     const int row_sums_dims[2] = {row_sums_rows, n_cell};
     if (!TfLiteIntArrayEqualsArray(row_sums->dims, 2, row_sums_dims)) {
@@ -1928,6 +1930,10 @@ TfLiteStatus Eval(TfLiteContext* context, TfLiteNode* node) {
           /*forward_sequence=*/true,
           /*time_major=*/true,
           /*output_offset=*/0, scratch_buffer, output_state, cell_state, output,
+          /*recurrent_to_input_is_diag=*/false,
+          /*recurrent_to_forget_is_diag=*/false,
+          /*recurrent_to_cell_is_diag=*/false,
+          /*recurrent_to_output_is_diag=*/false,
           CpuBackendContext::GetFromContext(context));
     }
     case kTfLiteUInt8:
@@ -2029,6 +2035,10 @@ TfLiteStatus Eval(TfLiteContext* context, TfLiteNode* node) {
               /*aux_input_zp=*/nullptr,
               GetTemporary(context, node, kOutputStateZeroPoints), row_sums,
               row_sums_size, &op_data->compute_row_sums,
+              /*recurrent_to_input_is_diag=*/false,
+              /*recurrent_to_forget_is_diag=*/false,
+              /*recurrent_to_cell_is_diag=*/false,
+              /*recurrent_to_output_is_diag=*/false,
               CpuBackendContext::GetFromContext(context));
         }
         return lstm_eval::EvalHybrid(
@@ -2072,6 +2082,10 @@ TfLiteStatus Eval(TfLiteContext* context, TfLiteNode* node) {
             /*aux_input_zp=*/nullptr,
             GetTemporary(context, node, kOutputStateZeroPoints), row_sums,
             row_sums_size, &op_data->compute_row_sums,
+            /*recurrent_to_input_is_diag=*/false,
+            /*recurrent_to_forget_is_diag=*/false,
+            /*recurrent_to_cell_is_diag=*/false,
+            /*recurrent_to_output_is_diag=*/false,
             CpuBackendContext::GetFromContext(context));
       }
       const int num_intermediate_tensors = node->intermediates->size;

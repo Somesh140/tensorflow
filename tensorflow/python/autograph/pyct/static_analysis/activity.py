@@ -570,7 +570,7 @@ class ActivityAnalyzer(transformer.Base):
       node.decorator_list = self.visit_block(node.decorator_list)
       if node.returns:
         node.returns = self._process_annotation(node.returns)
-      # Argument annotartions (includeing defaults) affect the defining context.
+      # Argument annotartions (including defaults) affect the defining context.
       node = self._visit_arg_annotations(node)
 
       function_name = qual_names.QN(node.name)
@@ -634,6 +634,8 @@ class ActivityAnalyzer(transformer.Base):
       lambda_scope = self.scope
       self._exit_and_record_scope(node, NodeAnno.ARGS_AND_BODY_SCOPE)
 
+      # TODO(bhack:) https://github.com/tensorflow/tensorflow/issues/56089
+      # remove after deprecation
       # Exception: lambdas are assumed to be used in the place where
       # they are defined. Therefore, their activity is passed on to the
       # calling statement.

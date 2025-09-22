@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -71,15 +72,15 @@ void AppendFloatValues(const int num_of_elements, const float* float_values,
 
 }  // namespace
 
-absl::optional<NodeDef> ExtractSmallTensorValue(TFE_Context* context,
-                                                TFE_TensorHandle* tensor,
-                                                const Layout& layout,
-                                                TF_Status* status) {
+std::optional<NodeDef> ExtractSmallTensorValue(TFE_Context* context,
+                                               TFE_TensorHandle* tensor,
+                                               const Layout& layout,
+                                               TF_Status* status) {
   if (!layout.IsFullyReplicated()) return std::nullopt;
   auto num_elements = TFE_TensorHandleNumElements(tensor, status);
-  if (TF_GetCode(status) != TF_OK) return absl::nullopt;
+  if (TF_GetCode(status) != TF_OK) return std::nullopt;
 
-  if (num_elements >= kSmallTensorThreshold) return absl::nullopt;
+  if (num_elements >= kSmallTensorThreshold) return std::nullopt;
 
   // Check the DType before attempting to resolve the tensor so we don't try to
   // copy resource-dtype tensors off the DTensor device. Currently we only
@@ -87,7 +88,7 @@ absl::optional<NodeDef> ExtractSmallTensorValue(TFE_Context* context,
   // and tf_string tensors that are mostly used in save/restore ops.
   const auto& dtype = TFE_TensorHandleDataType(tensor);
   if (absl::c_find(kAllowedDataType, dtype) == std::end(kAllowedDataType)) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   // This is the enum from protobuf, or the following AddNodeAttr will always
@@ -95,7 +96,7 @@ absl::optional<NodeDef> ExtractSmallTensorValue(TFE_Context* context,
   const auto& datatype = static_cast<DataType>(dtype);
   std::unique_ptr<TF_Tensor, decltype(&TF_DeleteTensor)> value_tensor(
       TFE_TensorHandleResolve(tensor, status), TF_DeleteTensor);
-  if (TF_GetCode(status) != TF_OK) return absl::nullopt;
+  if (TF_GetCode(status) != TF_OK) return std::nullopt;
 
   NodeDef node_def;
   node_def.set_op("Const");
@@ -103,29 +104,29 @@ absl::optional<NodeDef> ExtractSmallTensorValue(TFE_Context* context,
 
   TensorProto tensor_proto;
   tensor_proto.set_dtype(datatype);
+
+  void* raw_data = TF_TensorData(value_tensor.get());
+  if (!raw_data) {
+    TF_SetStatus(status, TF_INTERNAL, "TF_TensorData returned nullptr.");
+    return std::nullopt;
+  }
+
   switch (dtype) {
     case TF_INT32:
-      AppendIntValues(num_elements,
-                      static_cast<int*>(TF_TensorData(value_tensor.get())),
+      AppendIntValues(num_elements, static_cast<const int*>(raw_data),
                       &tensor_proto);
       break;
     case TF_INT64:
-      AppendInt64Values(
-          num_elements,
-          static_cast<const int64_t*>(TF_TensorData(value_tensor.get())),
-          &tensor_proto);
+      AppendInt64Values(num_elements, static_cast<const int64_t*>(raw_data),
+                        &tensor_proto);
       break;
     case TF_STRING:
-      AppendStringValues(
-          num_elements,
-          static_cast<const TF_TString*>(TF_TensorData(value_tensor.get())),
-          &tensor_proto);
+      AppendStringValues(num_elements, static_cast<const TF_TString*>(raw_data),
+                         &tensor_proto);
       break;
     case TF_FLOAT:
-      AppendFloatValues(
-          num_elements,
-          static_cast<const float*>(TF_TensorData(value_tensor.get())),
-          &tensor_proto);
+      AppendFloatValues(num_elements, static_cast<const float*>(raw_data),
+                        &tensor_proto);
       break;
     default:
       TF_SetStatus(status, TF_INTERNAL,
@@ -133,7 +134,7 @@ absl::optional<NodeDef> ExtractSmallTensorValue(TFE_Context* context,
                                 " fell through the supported extraction list. "
                                 "This should not happen.")
                        .c_str());
-      return absl::nullopt;
+      return std::nullopt;
   }
 
   std::vector<int64_t> dim_list;
@@ -150,26 +151,6 @@ absl::optional<NodeDef> ExtractSmallTensorValue(TFE_Context* context,
   AddNodeAttr(kLayoutAttr, {layout.ToString()}, &node_def);
   AddNodeAttr(kMeshAttr, layout.mesh().ToString(), &node_def);
   return node_def;
-}
-
-bool ShouldFoldInputArgument(absl::string_view operation_name,
-                             int input_index) {
-  // Fold if we are in a function or if a special eager op.
-  // TODO(xiejw,power): Think about how to generalize this so it does not depend
-  // on operation_name. For example, we can check the max abs value of the
-  // tensor value.
-  if (operation_name == absl::string_view("StatelessRandomUniform") ||
-      operation_name == absl::string_view("StatelessRandomUniformFullInt") ||
-      operation_name == absl::string_view("StatelessRandomNormal") ||
-      operation_name == absl::string_view("StatelessTruncatedNormal")) {
-    // For all stateless rng ops, we avoid fold seed (input_index==1) in graph.
-    // This is an important optimization to avoid unnecessary MLIR SPMD lowering
-    // and TPU compilation during model parameters initialization process.
-    // which typically have the same shape for rng ops but different seeds.
-    return input_index != 1;
-  }
-
-  return true;
 }
 
 bool NodeDefsHaveDifferentTensorProto(const NodeDef& a, const NodeDef& b) {

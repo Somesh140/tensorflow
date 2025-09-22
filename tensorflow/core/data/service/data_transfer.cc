@@ -19,9 +19,9 @@ limitations under the License.
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "absl/strings/str_join.h"
-#include "tensorflow/core/data/dataset.pb.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/framework/variant.h"
@@ -39,16 +39,14 @@ mutex* get_lock() {
 }
 
 using DataTransferServerFactories =
-    std::unordered_map<std::string,
-                       std::function<std::shared_ptr<DataTransferServer>(
-                           DataTransferServer::GetElementT)>>;
+    std::unordered_map<std::string, DataTransferServer::ServerFactoryT>;
 DataTransferServerFactories& transfer_server_factories() {
   static auto& factories = *new DataTransferServerFactories();
   return factories;
 }
 
 using DataTransferClientFactories =
-    std::unordered_map<std::string, DataTransferClient::FactoryT>;
+    std::unordered_map<std::string, DataTransferClient::ClientFactoryT>;
 DataTransferClientFactories& transfer_client_factories() {
   static auto& factories = *new DataTransferClientFactories();
   return factories;
@@ -84,9 +82,7 @@ size_t GetElementResult::EstimatedMemoryUsageBytes() const {
   return size_bytes;
 }
 
-void DataTransferServer::Register(
-    std::string name,
-    std::function<std::shared_ptr<DataTransferServer>(GetElementT)> factory) {
+void DataTransferServer::Register(std::string name, ServerFactoryT factory) {
   mutex_lock l(*get_lock());
   if (!transfer_server_factories().insert({name, factory}).second) {
     LOG(ERROR)
@@ -95,16 +91,16 @@ void DataTransferServer::Register(
   }
 }
 
-Status DataTransferServer::Build(std::string name, GetElementT get_element,
-                                 std::shared_ptr<DataTransferServer>* out) {
+absl::Status DataTransferServer::Build(
+    std::string name, GetElementT get_element,
+    std::shared_ptr<DataTransferServer>* out) {
   mutex_lock l(*get_lock());
   auto it = transfer_server_factories().find(name);
   if (it != transfer_server_factories().end()) {
-    *out = it->second(get_element);
-    return OkStatus();
+    return it->second(get_element, out);
   }
 
-  std::vector<string> available_names;
+  std::vector<std::string> available_names;
   for (const auto& factory : transfer_server_factories()) {
     available_names.push_back(factory.first);
   }
@@ -115,7 +111,7 @@ Status DataTransferServer::Build(std::string name, GetElementT get_element,
       " ]");
 }
 
-void DataTransferClient::Register(std::string name, FactoryT factory) {
+void DataTransferClient::Register(std::string name, ClientFactoryT factory) {
   mutex_lock l(*get_lock());
   if (!transfer_client_factories().insert({name, factory}).second) {
     LOG(ERROR)
@@ -124,8 +120,8 @@ void DataTransferClient::Register(std::string name, FactoryT factory) {
   }
 }
 
-Status DataTransferClient::Build(std::string name, Config config,
-                                 std::unique_ptr<DataTransferClient>* out) {
+absl::Status DataTransferClient::Build(
+    std::string name, Config config, std::unique_ptr<DataTransferClient>* out) {
   mutex_lock l(*get_lock());
   auto it = transfer_client_factories().find(name);
   if (it != transfer_client_factories().end()) {

@@ -15,8 +15,8 @@ limitations under the License.
 
 // Common utilities for random shuffling.
 
-#ifndef TENSORFLOW_CORE_KERNELS_RANDOM_SHUFFLE_COMMON_H_
-#define TENSORFLOW_CORE_KERNELS_RANDOM_SHUFFLE_COMMON_H_
+#ifndef TENSORFLOW_CORE_KERNELS_SHUFFLE_COMMON_H_
+#define TENSORFLOW_CORE_KERNELS_SHUFFLE_COMMON_H_
 
 #include <algorithm>
 #include <functional>
@@ -61,9 +61,9 @@ static void IndexedShuffle(const int64_t size, const InT& input_mat,
 }
 
 template <typename T>
-Status RandomShuffle(OpKernelContext* context, const Tensor& input,
-                     int output_idx,
-                     std::function<random::PhiloxRandom(int64_t)> get_rng) {
+absl::Status RandomShuffle(
+    OpKernelContext* context, const Tensor& input, int output_idx,
+    std::function<random::PhiloxRandom(int64_t)> get_rng) {
   if (input.NumElements() <= 1 || input.dim_size(0) <= 1) {
     // No shuffling is required, so copy input directly to output
     context->set_output(output_idx, input);
@@ -94,9 +94,9 @@ Status RandomShuffle(OpKernelContext* context, const Tensor& input,
       }
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_CORE_KERNELS_RANDOM_SHUFFLE_COMMON_H_
+#endif  // TENSORFLOW_CORE_KERNELS_SHUFFLE_COMMON_H_

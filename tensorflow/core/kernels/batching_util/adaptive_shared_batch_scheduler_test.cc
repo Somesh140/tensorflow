@@ -15,8 +15,8 @@ limitations under the License.
 
 #include "tensorflow/core/kernels/batching_util/adaptive_shared_batch_scheduler.h"
 
+#include "absl/synchronization/notification.h"
 #include "tensorflow/core/kernels/batching_util/fake_clock_env.h"
-#include "tensorflow/core/lib/core/notification.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/lib/gtl/cleanup.h"
 #include "tensorflow/core/platform/macros.h"
@@ -39,14 +39,16 @@ class FakeTask : public BatchTask {
  private:
   size_t size_;
 
-  TF_DISALLOW_COPY_AND_ASSIGN(FakeTask);
+  FakeTask(const FakeTask&) = delete;
+  void operator=(const FakeTask&) = delete;
 };
 
 // Creates a FakeTask of size 'task_size', and calls 'scheduler->Schedule()' on
 // that task. Returns the resulting status.
-Status ScheduleTask(size_t task_size, BatchScheduler<FakeTask>* scheduler) {
+absl::Status ScheduleTask(size_t task_size,
+                          BatchScheduler<FakeTask>* scheduler) {
   std::unique_ptr<FakeTask> task(new FakeTask(task_size));
-  Status status = scheduler->Schedule(&task);
+  absl::Status status = scheduler->Schedule(&task);
   // Schedule() should have consumed 'task' iff it returned Status::OK.
   CHECK_EQ(status.ok(), task == nullptr);
   return status;
@@ -56,7 +58,8 @@ Status ScheduleTask(size_t task_size, BatchScheduler<FakeTask>* scheduler) {
 // 'env' in a loop until 'stop' is notified. Useful for allowing objects that
 // use the clock to be destroyed.
 std::unique_ptr<Thread> CreateFakeClockAdvancerThread(
-    test_util::FakeClockEnv* env, Notification* start, Notification* stop) {
+    test_util::FakeClockEnv* env, absl::Notification* start,
+    absl::Notification* stop) {
   return std::unique_ptr<Thread>(Env::Default()->StartThread(
       {}, "FakeClockAdvancerThread", [env, start, stop] {
         start->WaitForNotification();
@@ -103,7 +106,7 @@ TEST(AdaptiveSharedBatchSchedulerTest, InFlightBatchesLimit) {
   options.batches_to_average_over = 1000;
   mutex mu;
   int processed_batches = 0;
-  Notification finish_processing;
+  absl::Notification finish_processing;
   auto queue_callback = [&mu, &processed_batches, &finish_processing](
                             std::unique_ptr<Batch<FakeTask>> batch) {
     ASSERT_TRUE(batch->IsClosed());
@@ -139,7 +142,7 @@ TEST(AdaptiveSharedBatchSchedulerTest, InFlightBatchesLimit) {
 
 TEST(AdaptiveSharedBatchSchedulerTest, InFlightBatchesLimitTuning) {
   test_util::FakeClockEnv env(Env::Default());
-  Notification start_teardown, stop_teardown;
+  absl::Notification start_teardown, stop_teardown;
   std::unique_ptr<Thread> teardown_thread =
       CreateFakeClockAdvancerThread(&env, &start_teardown, &stop_teardown);
   {
@@ -201,7 +204,7 @@ TEST(AdaptiveSharedBatchSchedulerTest, InFlightBatchesLimitTuning) {
 
 TEST(AdaptiveSharedBatchSchedulerTest, FullBatchSchedulingBoostMicros) {
   test_util::FakeClockEnv env(Env::Default());
-  Notification start_teardown, stop_teardown;
+  absl::Notification start_teardown, stop_teardown;
   std::unique_ptr<Thread> teardown_thread =
       CreateFakeClockAdvancerThread(&env, &start_teardown, &stop_teardown);
   {
@@ -213,7 +216,7 @@ TEST(AdaptiveSharedBatchSchedulerTest, FullBatchSchedulingBoostMicros) {
     options.full_batch_scheduling_boost_micros = 100;
     mutex mu;
     int processed_batches = 0;
-    Notification finish_processing;
+    absl::Notification finish_processing;
     auto queue_callback = [&mu, &processed_batches, &finish_processing](
                               std::unique_ptr<Batch<FakeTask>> batch) {
       ASSERT_TRUE(batch->IsClosed());
@@ -275,7 +278,7 @@ TEST(AdaptiveSharedBatchSchedulerTest, FullBatchSchedulingBoostMicros) {
 
 TEST(AdaptiveSharedBatchSchedulerTest, FIFO) {
   test_util::FakeClockEnv env(Env::Default());
-  Notification start_teardown, stop_teardown;
+  absl::Notification start_teardown, stop_teardown;
   std::unique_ptr<Thread> teardown_thread =
       CreateFakeClockAdvancerThread(&env, &start_teardown, &stop_teardown);
   {
@@ -288,7 +291,7 @@ TEST(AdaptiveSharedBatchSchedulerTest, FIFO) {
     options.fifo_scheduling = true;
     mutex mu;
     int processed_batches = 0;
-    Notification finish_processing;
+    absl::Notification finish_processing;
     auto queue_callback = [&mu, &processed_batches, &finish_processing](
                               std::unique_ptr<Batch<FakeTask>> batch) {
       ASSERT_TRUE(batch->IsClosed());
@@ -350,7 +353,7 @@ TEST(AdaptiveSharedBatchSchedulerTest, DeleteQueue) {
   options.batches_to_average_over = 1000;
   mutex mu;
   int processed_batches = 0;
-  Notification finish_processing;
+  absl::Notification finish_processing;
   auto queue_callback = [&mu, &processed_batches, &finish_processing](
                             std::unique_ptr<Batch<FakeTask>> batch) {
     ASSERT_TRUE(batch->IsClosed());
@@ -387,7 +390,7 @@ TEST(AdaptiveSharedBatchSchedulerTest, QueueCapacityInfo) {
   options.batches_to_average_over = 1000;
   mutex mu;
   int processed_batches = 0;
-  Notification finish_processing;
+  absl::Notification finish_processing;
   auto queue_callback = [&mu, &processed_batches, &finish_processing](
                             std::unique_ptr<Batch<FakeTask>> batch) {
     ASSERT_TRUE(batch->IsClosed());
@@ -469,7 +472,7 @@ TEST(AdaptiveSharedBatchSchedulerTest, TruncateBatches) {
           output_tasks->emplace_back(new FakeTask(task_size));
           remaining_size -= task_size;
         }
-        return OkStatus();
+        return absl::OkStatus();
       };
   TF_ASSERT_OK(scheduler->AddQueue(queue_options, queue_callback, &queue));
   TF_ASSERT_OK(ScheduleTask(30, queue.get()));

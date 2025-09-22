@@ -24,11 +24,11 @@ namespace mlir {
 namespace TFL {
 namespace {
 
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_IDENTIFYDILATEDCONVPASS
 #include "tensorflow/compiler/mlir/lite/transforms/passes.h.inc"
 
 struct IdentifyDilatedConvPass
-    : public IdentifyDilatedConvPassBase<IdentifyDilatedConvPass> {
+    : public impl::IdentifyDilatedConvPassBase<IdentifyDilatedConvPass> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(IdentifyDilatedConvPass)
   void runOnOperation() override;
 };
@@ -40,7 +40,7 @@ void IdentifyDilatedConvPass::runOnOperation() {
   patterns.add<ConvertTFDilatedConvOp<TF::Conv2DOp>,
                ConvertTFDilatedConvOp<TF::DepthwiseConv2dNativeOp>>(
       &getContext());
-  (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
+  (void)applyPatternsGreedily(func, std::move(patterns));
 }
 }  // namespace
 std::unique_ptr<OperationPass<func::FuncOp>> CreateIdentifyDilatedConvPass() {

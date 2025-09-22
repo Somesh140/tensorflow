@@ -17,10 +17,12 @@ limitations under the License.
 #define TENSORFLOW_LITE_DELEGATES_GPU_CL_CL_OPERATION_H_
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/strings/str_cat.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_arguments.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_command_queue.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_context.h"
@@ -61,12 +63,6 @@ class ClOperation {
   const GPUOperation& GetGpuOperation() const { return *operation_; }
   uint64_t GetKernelFingerprint() const { return kernel_fingerprint_; }
 
-  const OperationDef& GetDefinition() const {
-    return operation_->GetDefinition();
-  }
-
-  absl::Status AddOperation(ClOperation* operation);
-
   // should be called after changes of inputs/outputs.
   absl::Status UpdateParams();
 
@@ -79,7 +75,7 @@ class ClOperation {
                            operation_->work_group_size_);
   }
 
-  absl::Status AddToCommanBuffer(cl_command_buffer_khr cb) {
+  absl::Status AddToCommandBuffer(cl_command_buffer_khr cb) {
     RETURN_IF_ERROR(cl_args_.Bind(kernel_.kernel()));
     std::array<size_t, 3> local;
     std::array<size_t, 3> global;
@@ -126,6 +122,10 @@ class ClOperation {
                                    CLContext* context);
 
   int3 GetWorkGroupSize() const { return operation_->work_group_size_; }
+
+  bool HasEqualScalarArguments(const ClOperation& op) const {
+    return cl_args_.HasEqualScalarArguments(op.cl_args_);
+  }
 
  private:
   std::unique_ptr<GPUOperation> operation_;

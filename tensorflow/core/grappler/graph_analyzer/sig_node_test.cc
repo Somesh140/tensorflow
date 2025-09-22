@@ -15,10 +15,24 @@ limitations under the License.
 
 #include "tensorflow/core/grappler/graph_analyzer/sig_node.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <set>
+#include <utility>
+#include <vector>
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/memory/memory.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_format.h"
+#include "tensorflow/core/framework/graph.pb.h"
+#include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/grappler/graph_analyzer/subgraph.h"
 #include "tensorflow/core/grappler/graph_analyzer/test_tools.h"
 #include "tensorflow/core/grappler/utils.h"
@@ -479,7 +493,8 @@ TEST_F(SigNodeTest, EqualsLinkSize) {
   (*graph1.add_node()) = MakeNodeMul("node2", "node1", "node1");
 
   GenNodeMap gen_map1;
-  ASSERT_THAT(GenNode::BuildGraphInMap(graph1, &gen_map1), Eq(OkStatus()));
+  ASSERT_THAT(GenNode::BuildGraphInMap(graph1, &gen_map1),
+              Eq(absl::OkStatus()));
 
   Subgraph::Identity id1;
   id1.insert(gen_map1["node1"].get());
@@ -497,7 +512,8 @@ TEST_F(SigNodeTest, EqualsLinkSize) {
   node22->add_input("node2");
 
   GenNodeMap gen_map2;
-  ASSERT_THAT(GenNode::BuildGraphInMap(graph2, &gen_map2), Eq(OkStatus()));
+  ASSERT_THAT(GenNode::BuildGraphInMap(graph2, &gen_map2),
+              Eq(absl::OkStatus()));
 
   Subgraph::Identity id2;
   id2.insert(gen_map2["node1"].get());
@@ -519,7 +535,8 @@ TEST_F(SigNodeTest, EqualsLinks) {
   (*graph1.add_node()) = MakeNodeMul("node2", "node1", "node1");
 
   GenNodeMap gen_map1;
-  ASSERT_THAT(GenNode::BuildGraphInMap(graph1, &gen_map1), Eq(OkStatus()));
+  ASSERT_THAT(GenNode::BuildGraphInMap(graph1, &gen_map1),
+              Eq(absl::OkStatus()));
 
   Subgraph::Identity id1;
   id1.insert(gen_map1["node1"].get());
@@ -530,7 +547,8 @@ TEST_F(SigNodeTest, EqualsLinks) {
   sg1.ExtractForSignature(&sig_map1);
 
   GenNodeMap gen_map2;
-  ASSERT_THAT(GenNode::BuildGraphInMap(graph1, &gen_map2), Eq(OkStatus()));
+  ASSERT_THAT(GenNode::BuildGraphInMap(graph1, &gen_map2),
+              Eq(absl::OkStatus()));
 
   Subgraph::Identity id2;
   id2.insert(gen_map2["node1"].get());
@@ -609,8 +627,8 @@ class SignatureTest : public SigBaseTest {
 
     gen_map_.clear();
     sig_.map.clear();
-    Status result = GenNode::BuildGraphInMap(graph, &gen_map_);
-    ASSERT_THAT(result, Eq(OkStatus()));
+    absl::Status result = GenNode::BuildGraphInMap(graph, &gen_map_);
+    ASSERT_THAT(result, Eq(absl::OkStatus()));
     Subgraph::Identity id;
     for (const auto& entry : gen_map_) {
       id.insert(entry.second.get());
@@ -668,7 +686,7 @@ class SignatureTest : public SigBaseTest {
       OrderLinks(&sig_);
 
       // The test as such.
-      ASSERT_THAT(sig_.Compute(), Eq(OkStatus()));
+      ASSERT_THAT(sig_.Compute(), Eq(absl::OkStatus()));
 
       signatures.insert(sig_.ToString());
 
@@ -1034,8 +1052,9 @@ TEST_F(SignatureTest, ComputeOneRoundSplitLinear) {
 TEST_F(SignatureTest, OrderLinks) {
   gen_map_.clear();
   sig_.map.clear();
-  Status result = GenNode::BuildGraphInMap(graph_for_link_order_, &gen_map_);
-  ASSERT_THAT(result, Eq(OkStatus()));
+  absl::Status result =
+      GenNode::BuildGraphInMap(graph_for_link_order_, &gen_map_);
+  ASSERT_THAT(result, Eq(absl::OkStatus()));
   Subgraph::Identity id;
   for (const auto& entry : gen_map_) {
     id.insert(entry.second.get());
@@ -1084,7 +1103,7 @@ TEST_F(SignatureTest, GraphTooBig) {
     (*graph.add_node()) = MakeNodeConst(absl::StrFormat("node%d", i));
   }
 
-  ASSERT_THAT(GenNode::BuildGraphInMap(graph, &gen_map_), Eq(OkStatus()));
+  ASSERT_THAT(GenNode::BuildGraphInMap(graph, &gen_map_), Eq(absl::OkStatus()));
 
   Subgraph::Identity id;
   for (const auto& entry : gen_map_) {
@@ -1093,11 +1112,12 @@ TEST_F(SignatureTest, GraphTooBig) {
   Subgraph sg(id);
   sg.ExtractForSignature(&sig_.map);
 
-  ASSERT_THAT(sig_.Compute(),
-              Eq(Status(error::INVALID_ARGUMENT,
-                        "A graph of 65 nodes is too big for signature "
-                        "computation, the maximal supported node count is "
-                        "64.")));
+  ASSERT_THAT(
+      sig_.Compute(),
+      Eq(absl::Status(absl::StatusCode::kInvalidArgument,
+                      "A graph of 65 nodes is too big for signature "
+                      "computation, the maximal supported node count is "
+                      "64.")));
 }
 
 TEST_F(SignatureTest, ToString) {
@@ -1173,7 +1193,7 @@ TEST_F(SignatureTest, Equals) {
   // Start with 2 copies of the same graph.
   GenNodeMap gen_map1;
   ASSERT_THAT(GenNode::BuildGraphInMap(graph_circular_bidir_, &gen_map1),
-              Eq(OkStatus()));
+              Eq(absl::OkStatus()));
 
   Subgraph::Identity id1;
   id1.insert(gen_map1["node1"].get());
@@ -1182,11 +1202,11 @@ TEST_F(SignatureTest, Equals) {
 
   Signature sig1;
   sg1.ExtractForSignature(&sig1.map);
-  ASSERT_THAT(sig1.Compute(), Eq(OkStatus()));
+  ASSERT_THAT(sig1.Compute(), Eq(absl::OkStatus()));
 
   GenNodeMap gen_map2;
   ASSERT_THAT(GenNode::BuildGraphInMap(graph_circular_bidir_, &gen_map2),
-              Eq(OkStatus()));
+              Eq(absl::OkStatus()));
 
   Subgraph::Identity id2;
   id2.insert(gen_map2["node1"].get());
@@ -1195,7 +1215,7 @@ TEST_F(SignatureTest, Equals) {
 
   Signature sig2;
   sg2.ExtractForSignature(&sig2.map);
-  ASSERT_THAT(sig2.Compute(), Eq(OkStatus()));
+  ASSERT_THAT(sig2.Compute(), Eq(absl::OkStatus()));
 
   EXPECT_TRUE(sig1 == sig2);
 

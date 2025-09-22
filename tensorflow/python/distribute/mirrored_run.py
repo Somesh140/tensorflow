@@ -15,7 +15,6 @@
 """Class MirroredStrategy implementing tf.distribute.Strategy."""
 
 import contextlib
-import functools
 import threading
 import weakref
 
@@ -76,11 +75,13 @@ def call_for_each_replica(strategy, fn, args=None, kwargs=None):
       # the tf.function. We use _clone() instead of @tf.function wrapped
       # call_for_each_replica() because we would like to retain the arguments to
       # the @tf.function decorator of fn.
+      def wrapped_fn(*args, **kwargs):
+        return call_for_each_replica(strategy, fn.python_function, args, kwargs)
+
       wrapped = fn._clone(  # pylint: disable=protected-access
-          python_function=functools.partial(call_for_each_replica, strategy,
-                                            fn.python_function))
+          python_function=wrapped_fn)
       _cfer_fn_cache[strategy][fn] = wrapped
-    return wrapped(args, kwargs)
+    return wrapped(*args, **kwargs)
 
   if context.executing_eagerly():
     logging.log_first_n(
@@ -251,7 +252,7 @@ def _call_for_each_replica(distribution, fn, args, kwargs):
           for t in threads:
             mtt_captured_control_deps.update(t.captured_control_deps)
 
-          # Control is transfered from _MirroredReplicaThread (MRT) to the main
+          # Control is transferred from _MirroredReplicaThread (MRT) to the main
           # thread, i.e., here, to perform `merge_fn`, and thus we preserve the
           # name scope,  control dependencies, etc. from MRT at the time
           # `merge_call` is made.
@@ -443,7 +444,7 @@ class _MirroredReplicaContext(distribute_lib.ReplicaContext):
       fn: a function that is called in cross replica context with grouped
         arguments from each replica. `fn` should returns grouped values.
       args: positional arguments to `fn`.
-      kwargs: keyward arguments to `fn`.
+      kwargs: keyword arguments to `fn`.
 
     Returns:
       Return value of `fn` for the current replica.
@@ -452,7 +453,6 @@ class _MirroredReplicaContext(distribute_lib.ReplicaContext):
       RuntimeError: when merge_call happens in a different graph, e.g. in a
         different tf.function, which is not supported now.
       _RequestedStop: when stop is requested.
-
     """
     t = threading.current_thread()
     assert isinstance(t, _MirroredReplicaThread)

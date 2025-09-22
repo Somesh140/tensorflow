@@ -273,7 +273,7 @@ TEST(TensorUtil, Split) {
 TEST(TensorUtil, ConcatSplitStrings) {
   Tensor x(DT_STRING, TensorShape({4, 3}));
   for (int i = 0; i < 4 * 3; ++i) {
-    x.flat<tstring>()(i) = strings::StrCat("foo_", i);
+    x.flat<tstring>()(i) = absl::StrCat("foo_", i);
   }
 
   std::vector<Tensor> split;
@@ -287,11 +287,39 @@ TEST(TensorUtil, ConcatSplitStrings) {
 
   // Ensure that no memory is being shared between 'x' and 'x_round_tripped'.
   for (int i = 0; i < 4 * 3; ++i) {
-    x_round_tripped.flat<tstring>()(i) = strings::StrCat("bar_", i);
+    x_round_tripped.flat<tstring>()(i) = absl::StrCat("bar_", i);
   }
   for (int i = 0; i < 4 * 3; ++i) {
     EXPECT_NE(x.flat<tstring>()(i), x_round_tripped.flat<tstring>()(i));
   }
+}
+
+TEST(TensorProtoUtil, CreateTensorProtoSpan_string) {
+  // Don't use vector to trigger Span version.
+  string s[2] = {"a", "b"};
+  std::vector<size_t> shape{1, 2};
+  auto proto = tensor::CreateTensorProtoSpan<string>(s, shape);
+  TensorProto expected_tensor_proto;
+  expected_tensor_proto.set_dtype(DT_STRING);
+  expected_tensor_proto.mutable_tensor_shape()->add_dim()->set_size(1);
+  expected_tensor_proto.mutable_tensor_shape()->add_dim()->set_size(2);
+  expected_tensor_proto.add_string_val("a");
+  expected_tensor_proto.add_string_val("b");
+  EXPECT_EQ(proto.DebugString(), expected_tensor_proto.DebugString());
+}
+
+TEST(TensorProtoUtil, CreateTensorProtoSpan_int32) {
+  // Don't use vector to trigger Span version.
+  int32 s[2] = {123, 456};
+  std::vector<size_t> shape{1, 2};
+  auto proto = tensor::CreateTensorProtoSpan<int32>(s, shape);
+  TensorProto expected_tensor_proto;
+  expected_tensor_proto.set_dtype(DT_INT32);
+  expected_tensor_proto.mutable_tensor_shape()->add_dim()->set_size(1);
+  expected_tensor_proto.mutable_tensor_shape()->add_dim()->set_size(2);
+  expected_tensor_proto.add_int_val(123);
+  expected_tensor_proto.add_int_val(456);
+  EXPECT_EQ(proto.DebugString(), expected_tensor_proto.DebugString());
 }
 
 TEST(TensorProtoUtil, CreatesStringTensorProto) {

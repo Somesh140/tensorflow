@@ -17,6 +17,8 @@ limitations under the License.
 
 #include <cstdarg>
 
+#include "tensorflow/lite/logger.h"
+
 namespace tflite {
 namespace logging_internal {
 
@@ -37,6 +39,8 @@ const char* MinimalLogger::GetSeverityName(LogSeverity severity) {
       return "WARNING";
     case TFLITE_LOG_ERROR:
       return "ERROR";
+    case TFLITE_LOG_SILENT:
+      return "SILENT";
   }
   return "<Unknown severity>";
 }

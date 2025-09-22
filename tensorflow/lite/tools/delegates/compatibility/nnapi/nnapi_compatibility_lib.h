@@ -16,10 +16,11 @@ limitations under the License.
 #ifndef TENSORFLOW_LITE_TOOLS_DELEGATES_COMPATIBILITY_NNAPI_NNAPI_COMPATIBILITY_LIB_H_
 #define TENSORFLOW_LITE_TOOLS_DELEGATES_COMPATIBILITY_NNAPI_NNAPI_COMPATIBILITY_LIB_H_
 
+#include <cstdint>
 #include <map>
 #include <vector>
 
-#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/core/c/common.h"
 #include "tensorflow/lite/delegates/nnapi/nnapi_delegate_kernel.h"
 
 namespace tflite {

@@ -13,7 +13,7 @@ limitations under the License.
 
 #include <string>
 
-#include "tensorflow/core/common_runtime/forward_type_inference.h"
+#include "tensorflow/core/common_runtime/type_inference.h"
 #include "tensorflow/core/data/dataset_test_base.h"
 #include "tensorflow/core/graph/node_builder.h"
 #include "tensorflow/core/public/session_options.h"
@@ -291,7 +291,7 @@ ITERATOR_SAVE_AND_RESTORE_TEST_P(BatchDatasetOpTest, BatchDatasetParams,
 TEST_F(BatchDatasetOpTest, InvalidBatchSize) {
   auto batch_dataset_params = InvalidBatchSizeBatchDatasetParams();
   EXPECT_EQ(Initialize(batch_dataset_params).code(),
-            tensorflow::error::INVALID_ARGUMENT);
+            absl::StatusCode::kInvalidArgument);
 }
 
 // TODO(b/222556529) when Const has type constructor, remove the following
@@ -316,13 +316,13 @@ static void add_identity_nodes(Node* node, Graph& graph,
 }
 
 // Runs type inference pass on graph
-static Status type_inference(Graph& graph) {
+static absl::Status type_inference(Graph& graph) {
   GraphOptimizationPassOptions opt_options;
   std::unique_ptr<Graph> graph_ptr(new Graph(OpRegistry::Global()));
   graph_ptr->Copy(graph);
   opt_options.graph = &graph_ptr;
   opt_options.flib_def = graph.mutable_flib_def();
-  ForwardTypeInferencePass pass;
+  TypeInferencePass pass;
   return pass.Run(opt_options);
 }
 

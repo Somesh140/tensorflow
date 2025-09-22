@@ -15,32 +15,40 @@ limitations under the License.
 
 #include "tensorflow/dtensor/mlir/expansions/meta_spmd_expander.h"
 
+#include <cassert>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
-#include "absl/strings/str_join.h"
+#include "absl/status/status.h"
+#include "absl/types/optional.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/Attributes.h"  // from @llvm-project
+#include "mlir/IR/Block.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/Matchers.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/collection_ops_util.h"
-#include "tensorflow/compiler/mlir/utils/array_container_utils.h"
 #include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/types.h"
 #include "tensorflow/dtensor/cc/constants.h"
 #include "tensorflow/dtensor/cc/dstatus.h"
+#include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/collectives.h"
 #include "tensorflow/dtensor/mlir/dtensor_location.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
-#include "tensorflow/dtensor/mlir/spmd_expander.h"
+#include "tensorflow/dtensor/mlir/shape_utils.h"
 #include "tensorflow/dtensor/mlir/spmd_expander_common.h"
 #include "tensorflow/dtensor/mlir/value_utils.h"
 
@@ -70,8 +78,8 @@ StatusOr<llvm::DenseMap<int, Layout>> LayoutsFromPackedTensor(
   TF_ASSIGN_OR_RETURN(axis,
                       CanonicalizeAxis(axis,
                                        /*packed_rank=*/packed_layout.rank()));
-  const Layout unpacked_layout =
-      packed_layout.GetLayoutWithReducedDims({axis}, false);
+  TF_ASSIGN_OR_RETURN(const Layout unpacked_layout,
+                      packed_layout.GetLayoutWithReducedDims({axis}, false));
   llvm::DenseMap<int, Layout> layouts(num_unpacked_tensors);
   for (int i = 0; i < num_unpacked_tensors; ++i) {
     layouts[i] = unpacked_layout;
@@ -133,19 +141,20 @@ StatusOr<mlir::Operation*> PackSPMDExpander::ExpandOp(mlir::Operation* op) {
   TF_ASSIGN_OR_RETURN(const absl::optional<Layout> output_layout,
                       ExtractSingleLayoutFromOp(op));
 
-  const int output_rank = ValueRank(pack.output());
+  const int output_rank = ValueRank(pack.getOutput());
   if (output_rank == -1)
     return errors::Unimplemented("output must have a rank");
 
   TF_ASSIGN_OR_RETURN(
-      int axis, CanonicalizeAxis(pack.axis(), /*packed_rank=*/output_rank));
+      int axis, CanonicalizeAxis(pack.getAxis(), /*packed_rank=*/output_rank));
 
   // TODO(bfontain): This may not be the best, but for now relayout all inputs
   // to match the output layout. E.g. if the output layout is not but the input
   // is, this would force a AllConcat on all inputs, rather than first packing
   // and emitting one AllConcat.
-  const Layout new_input_layout =
-      output_layout->GetLayoutWithReducedDims({axis}, /*keep_dims=*/false);
+  TF_ASSIGN_OR_RETURN(
+      const Layout new_input_layout,
+      output_layout->GetLayoutWithReducedDims({axis}, /*keep_dims=*/false));
 
   for (int i = 0; i < op->getNumOperands(); ++i) {
     TF_ASSIGN_OR_RETURN(const absl::optional<Layout> layout,
@@ -165,7 +174,7 @@ StatusOr<mlir::Operation*> PackSPMDExpander::ExpandOp(mlir::Operation* op) {
 StatusOr<llvm::DenseMap<int, Layout>> PackSPMDExpander::ComputeLayoutForward(
     mlir::Operation* op, const llvm::DenseMap<int, Layout>& input_layouts) {
   auto pack = llvm::cast<mlir::TF::PackOp>(op);
-  const int axis = pack.axis();
+  const int axis = pack.getAxis();
   return LayoutFromUnpackedTensors(axis, input_layouts);
 }
 
@@ -175,7 +184,7 @@ StatusOr<llvm::DenseMap<int, Layout>> PackSPMDExpander::ComputeLayoutBackward(
     return llvm::DenseMap<int, Layout>();
 
   auto pack = llvm::cast<mlir::TF::PackOp>(op);
-  const int axis = pack.axis();
+  const int axis = pack.getAxis();
   return LayoutsFromPackedTensor(axis, output_layouts.lookup(0),
                                  pack->getNumOperands());
 }
@@ -194,22 +203,23 @@ StatusOr<mlir::Operation*> UnpackSPMDExpander::ExpandOp(mlir::Operation* op) {
   }
 
   TF_ASSIGN_OR_RETURN(
-      int axis, CanonicalizeAxis(unpack.axis(), /*packed_rank=*/input_rank));
+      int axis, CanonicalizeAxis(unpack.getAxis(), /*packed_rank=*/input_rank));
 
-  if (input_layout->num_shards_for_dim(input_layout->dim(axis)) != 1) {
+  if (input_layout->num_shards_for_dim(axis) != 1) {
     // If the axis being unpacked is sharded, relayout to replicated along that
     // axis since each device needs to split across it.
-    std::vector<ShardingSpec> new_layout_specs(input_rank);
+    std::vector<std::string> new_layout_specs(input_rank);
     for (int input_index = 0; input_index < input_rank; ++input_index) {
       if (input_index == axis) {
-        new_layout_specs[input_index].set_sharding_spec(Layout::kUnshardedDim);
+        new_layout_specs[input_index] = Layout::kUnshardedDim;
       } else {
-        new_layout_specs[input_index] = input_layout->dim(input_index);
+        new_layout_specs[input_index] =
+            input_layout->sharding_spec(input_index);
       }
     }
     TF_ASSIGN_OR_RETURN(
         Layout new_input_layout,
-        Layout::GetLayout(std::move(new_layout_specs), input_layout->mesh()));
+        Layout::GetLayout(new_layout_specs, input_layout->mesh()));
     TF_ASSIGN_OR_RETURN(
         mlir::Value new_input,
         EmitRelayout(unpack.getOperand(), *input_layout, new_input_layout));
@@ -224,7 +234,7 @@ StatusOr<llvm::DenseMap<int, Layout>> UnpackSPMDExpander::ComputeLayoutForward(
     return llvm::DenseMap<int, Layout>();
 
   auto unpack = llvm::cast<mlir::TF::UnpackOp>(op);
-  const int axis = unpack.axis();
+  const int axis = unpack.getAxis();
   return LayoutsFromPackedTensor(axis, input_layouts.lookup(0),
                                  unpack->getNumResults());
 }
@@ -232,37 +242,35 @@ StatusOr<llvm::DenseMap<int, Layout>> UnpackSPMDExpander::ComputeLayoutForward(
 StatusOr<llvm::DenseMap<int, Layout>> UnpackSPMDExpander::ComputeLayoutBackward(
     mlir::Operation* op, const llvm::DenseMap<int, Layout>& output_layouts) {
   auto unpack = llvm::cast<mlir::TF::UnpackOp>(op);
-  const int axis = unpack.axis();
+  const int axis = unpack.getAxis();
   return LayoutFromUnpackedTensors(axis, output_layouts);
 }
 
 namespace {
 
-Status VerifyPaddedDimensionNotSharded(const Layout& layout,
-                                       mlir::Value pad_input,
-                                       mlir::Value pad_output) {
-  auto input_type = pad_input.getType().dyn_cast<mlir::RankedTensorType>();
-  auto output_type = pad_output.getType().dyn_cast<mlir::RankedTensorType>();
+absl::Status VerifyPaddedDimensionNotSharded(const Layout& layout,
+                                             mlir::Value pad_input,
+                                             mlir::Value pad_output) {
+  auto input_type = mlir::dyn_cast<mlir::RankedTensorType>(pad_input.getType());
+  auto output_type =
+      mlir::dyn_cast<mlir::RankedTensorType>(pad_output.getType());
   if (!input_type || !output_type)
     return errors::InvalidArgument(
         "pad op input/output should have statically known shape for SPMD.");
 
   const auto input_shape = input_type.getShape();
   const auto output_shape = input_type.getShape();
-  for (const auto& dim_shard_and_index :
-       llvm::enumerate(layout.sharding_specs())) {
-    const int index = dim_shard_and_index.index();
-    const auto& tensor_dimension = dim_shard_and_index.value();
+  for (int index = 0; index < layout.rank(); ++index) {
     const int input_shape_for_dim = input_shape[index];
     const int output_shape_for_dim = output_shape[index];
     if ((input_shape_for_dim == -1 || output_shape_for_dim == -1 ||
          output_shape_for_dim != input_shape_for_dim) &&
-        layout.num_shards_for_dim(tensor_dimension) > 1) {
+        layout.num_shards_for_dim(index) > 1) {
       return errors::InvalidArgument(
           "Padding over sharded dimension is not allowed.");
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -296,12 +304,12 @@ StatusOr<llvm::DenseMap<int, Layout>> PadSPMDExpander::ComputeLayoutForward(
   mlir::Value pad_output;
 
   if (auto pad_v2 = llvm::dyn_cast<mlir::TF::PadV2Op>(op)) {
-    pad_output = pad_v2.output();
-    pad_input = pad_v2.input();
+    pad_output = pad_v2.getOutput();
+    pad_input = pad_v2.getInput();
   } else {
     auto pad_op = llvm::cast<mlir::TF::PadOp>(op);
-    pad_output = pad_op.output();
-    pad_input = pad_op.input();
+    pad_output = pad_op.getOutput();
+    pad_input = pad_op.getInput();
   }
 
   TF_RETURN_IF_ERROR(
@@ -320,14 +328,14 @@ StatusOr<llvm::DenseMap<int, Layout>> PadSPMDExpander::ComputeLayoutBackward(
   input_layouts[1] = Layout::ReplicatedOnMesh(mesh, /*rank=*/2);
 
   if (auto pad_v2 = llvm::dyn_cast<mlir::TF::PadV2Op>(op)) {
-    pad_output = pad_v2.output();
-    pad_input = pad_v2.input();
+    pad_output = pad_v2.getOutput();
+    pad_input = pad_v2.getInput();
     // `constant_values` operand
     input_layouts[2] = Layout::ReplicatedOnMesh(mesh, /*rank=*/0);
   } else {
     auto pad_op = llvm::cast<mlir::TF::PadOp>(op);
-    pad_output = pad_op.output();
-    pad_input = pad_op.input();
+    pad_output = pad_op.getOutput();
+    pad_input = pad_op.getInput();
   }
 
   if (output_layouts.find(0) != output_layouts.end()) {
@@ -342,19 +350,18 @@ StatusOr<llvm::DenseMap<int, Layout>> PadSPMDExpander::ComputeLayoutBackward(
 
 namespace {
 
-Status VerifyTileOperandLayout(const Layout& operand_layout,
-                               llvm::ArrayRef<int64_t> static_multiples) {
+absl::Status VerifyTileOperandLayout(const Layout& operand_layout,
+                                     llvm::ArrayRef<int64_t> static_multiples) {
   for (const auto& tensor_dim_and_multiple :
-       llvm::zip(operand_layout.sharding_specs(), static_multiples)) {
-    const auto& tensor_dimension = std::get<0>(tensor_dim_and_multiple);
-    const int64_t multiple_factor = std::get<1>(tensor_dim_and_multiple);
-    if (multiple_factor > 1 &&
-        operand_layout.num_shards_for_dim(tensor_dimension) > 1)
+       llvm::enumerate(static_multiples)) {
+    const auto& index = tensor_dim_and_multiple.index();
+    const int64_t multiple_factor = tensor_dim_and_multiple.value();
+    if (multiple_factor > 1 && operand_layout.num_shards_for_dim(index) > 1)
       return errors::InvalidArgument(
           "tile op with input sharded at dimension where `multiple` > 1 is not "
           "supported.");
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -363,14 +370,14 @@ StatusOr<mlir::Operation*> TileSPMDExpander::ExpandOp(mlir::Operation* op) {
   auto tile_op = llvm::cast<mlir::TF::TileOp>(op);
   // After layout propagation, tile op should already have the proper output
   // layout tagged on itself.
-  TF_ASSIGN_OR_RETURN(absl::optional<Layout> output_layout,
+  TF_ASSIGN_OR_RETURN(std::optional<Layout> output_layout,
                       ExtractSingleLayoutFromOp(op));
   if (!output_layout)
     return errors::InvalidArgument(
         "TileOP doesn't have a layout after layout propagation");
 
-  TF_ASSIGN_OR_RETURN(absl::optional<Layout> operand_layout,
-                      ExtractLayoutFromOperand(tile_op.input()));
+  TF_ASSIGN_OR_RETURN(std::optional<Layout> operand_layout,
+                      ExtractLayoutFromOperand(tile_op.getInput()));
   if (!operand_layout)
     return errors::InvalidArgument(
         "Input operand to TileOp doesn't have a layout after layout "
@@ -384,7 +391,7 @@ StatusOr<mlir::Operation*> TileSPMDExpander::ExpandOp(mlir::Operation* op) {
 
   llvm::SmallVector<int64_t, 4> static_multiples;
   auto status =
-      ExtractConstVectorFromValue(tile_op.multiples(), &static_multiples);
+      ExtractConstVectorFromValue(tile_op.getMultiples(), &static_multiples);
   if (!status.ok())
     return errors::Unimplemented(
         "Tile with a sharded output is not implemented for dynamic "
@@ -436,16 +443,16 @@ StatusOr<mlir::Operation*> TileSPMDExpander::ExpandOp(mlir::Operation* op) {
   auto multiples_const = IntConst(builder, location, local_tile_multiples);
 
   auto global_output_type =
-      tile_op.getResult().getType().cast<mlir::TensorType>();
+      mlir::cast<mlir::TensorType>(tile_op.getResult().getType());
   TF_ASSIGN_OR_RETURN(
       auto local_type,
       LocalTypeFromGlobalType(output_layout.value(), global_output_type));
 
   auto new_tile =
-      builder.create<mlir::TF::TileOp>(location, /*output=*/local_type,
-                                       /*input=*/tile_op.input(),
-                                       /*multiples=*/multiples_const);
-  tile_op.getResult().replaceAllUsesWith(new_tile.output());
+      mlir::TF::TileOp::create(builder, location, /*output=*/local_type,
+                               /*input=*/tile_op.getInput(),
+                               /*multiples=*/multiples_const);
+  tile_op.getResult().replaceAllUsesWith(new_tile.getOutput());
   tile_op.erase();
   return new_tile.getOperation();
 }
@@ -459,7 +466,7 @@ StatusOr<llvm::DenseMap<int, Layout>> TileSPMDExpander::ComputeLayoutForward(
   auto tile_op = llvm::cast<mlir::TF::TileOp>(op);
 
   auto output_ranked_type =
-      tile_op.output().getType().dyn_cast<mlir::RankedTensorType>();
+      mlir::dyn_cast<mlir::RankedTensorType>(tile_op.getOutput().getType());
   if (!output_ranked_type || !output_ranked_type.hasStaticShape()) {
     return errors::InvalidArgument(
         llvm::formatv(
@@ -471,7 +478,7 @@ StatusOr<llvm::DenseMap<int, Layout>> TileSPMDExpander::ComputeLayoutForward(
 
   llvm::SmallVector<int64_t, 4> static_multiple;
   auto status =
-      ExtractConstVectorFromValue(tile_op.multiples(), &static_multiple);
+      ExtractConstVectorFromValue(tile_op.getMultiples(), &static_multiple);
 
   // If multiple operands cannot be statically known, output is set to
   // replicated.
@@ -485,12 +492,11 @@ StatusOr<llvm::DenseMap<int, Layout>> TileSPMDExpander::ComputeLayoutForward(
   const Layout input_layout = input_layouts.lookup(0);
   std::vector<std::string> output_layout_specs;
   for (const auto& multiple_and_dim_sharding :
-       llvm::zip(static_multiple, input_layout.sharding_specs())) {
+       llvm::zip(static_multiple, input_layout.sharding_spec_strs())) {
     const int multiple = std::get<0>(multiple_and_dim_sharding);
     const auto& tensor_dimension = std::get<1>(multiple_and_dim_sharding);
-    output_layout_specs.push_back(multiple == 1
-                                      ? tensor_dimension.sharding_spec()
-                                      : Layout::kUnshardedDim);
+    output_layout_specs.push_back(multiple == 1 ? tensor_dimension
+                                                : Layout::kUnshardedDim);
   }
 
   TF_ASSIGN_OR_RETURN(const Layout output_layout,
@@ -505,7 +511,7 @@ StatusOr<llvm::DenseMap<int, Layout>> TileSPMDExpander::ComputeLayoutBackward(
 
   // Retrieve operand/output shapes of tile op.
   auto input_ranked_type =
-      tile_op.input().getType().dyn_cast<mlir::RankedTensorType>();
+      mlir::dyn_cast<mlir::RankedTensorType>(tile_op.getInput().getType());
   if (!input_ranked_type || !input_ranked_type.hasStaticShape()) {
     return errors::InvalidArgument(
         llvm::formatv(
@@ -519,12 +525,12 @@ StatusOr<llvm::DenseMap<int, Layout>> TileSPMDExpander::ComputeLayoutBackward(
 
   // `multiples` operand is always set to have replicated layout.
   input_layouts[1] = Layout::ReplicatedOnMesh(
-      mesh,
-      tile_op.multiples().getType().cast<mlir::RankedTensorType>().getRank());
+      mesh, mlir::cast<mlir::RankedTensorType>(tile_op.getMultiples().getType())
+                .getRank());
 
   llvm::SmallVector<int64_t, 4> static_multiple;
   auto status =
-      ExtractConstVectorFromValue(tile_op.multiples(), &static_multiple);
+      ExtractConstVectorFromValue(tile_op.getMultiples(), &static_multiple);
 
   // If multiple operands cannot be statically known they are set to replicated.
   if (!status.ok()) {
@@ -539,12 +545,11 @@ StatusOr<llvm::DenseMap<int, Layout>> TileSPMDExpander::ComputeLayoutBackward(
     const Layout output_layout = output_layouts.lookup(0);
     std::vector<std::string> input_layout_specs;
     for (const auto& multiple_and_dim_sharding :
-         llvm::zip(static_multiple, output_layout.sharding_specs())) {
+         llvm::zip(static_multiple, output_layout.sharding_spec_strs())) {
       const int multiple = std::get<0>(multiple_and_dim_sharding);
       const auto& tensor_dimension = std::get<1>(multiple_and_dim_sharding);
-      input_layout_specs.push_back(multiple == 1
-                                       ? tensor_dimension.sharding_spec()
-                                       : Layout::kUnshardedDim);
+      input_layout_specs.push_back(multiple == 1 ? tensor_dimension
+                                                 : Layout::kUnshardedDim);
     }
     TF_ASSIGN_OR_RETURN(const Layout input_layout,
                         Layout::GetLayout(input_layout_specs, mesh));
@@ -645,8 +650,8 @@ StatusOr<Layout> MakeLayoutForReshape(
   // first entry of the input segment divides the output shape on the first
   // entry of the output segment, we request a sharded layout on that axis.
   for (int i = 0; i < input_segment_start.size(); ++i) {
-    const int num_shards = input_layout.num_shards_for_dim(
-        input_layout.dim(input_segment_start[i]));
+    const int num_shards =
+        input_layout.num_shards_for_dim(input_segment_start[i]);
     if (output_shape[output_segment_start[i]] % num_shards == 0)
       layout_specs[output_segment_start[i]] =
           input_layout.sharding_spec(input_segment_start[i]);
@@ -708,8 +713,8 @@ StatusOr<mlir::Operation*> ReshapeSPMDExpander::ExpandOp(mlir::Operation* op) {
   //   inserted. For example, reshape a [2, 4, 3] shape tensor with layout
   //   ['not_sharded', 'x', 'not_sharded'] to [2, 12] shape tensor fully
   //   replicated can be supported.
-  std::vector<ShardingSpec> tgt_input_layout(input_layout->rank());
-  std::vector<ShardingSpec> tgt_output_layout(output_layout->rank());
+  std::vector<std::string> tgt_input_layout(input_layout->rank());
+  std::vector<std::string> tgt_output_layout(output_layout->rank());
 
   for (int i = 0; i < input_segment_start.size(); ++i) {
     const int input_start = input_segment_start[i];
@@ -721,14 +726,13 @@ StatusOr<mlir::Operation*> ReshapeSPMDExpander::ExpandOp(mlir::Operation* op) {
     // Between this segment and the last segment, if there is a gap, insert
     // dimensions of size 1 and kUnshardedDim as output layout dim.
     for (int j = prev_input_segment_end; j < input_start; ++j)
-      tgt_input_layout[j].set_sharding_spec(Layout::kUnshardedDim);
+      tgt_input_layout[j] = Layout::kUnshardedDim;
     for (int j = prev_output_segment_end; j < output_start; ++j) {
       local_reshape_const.emplace_back(1);
-      tgt_output_layout[j].set_sharding_spec(Layout::kUnshardedDim);
+      tgt_output_layout[j] = Layout::kUnshardedDim;
     }
 
-    const int num_input_shards =
-        input_layout->num_shards_for_dim(input_layout->dim(input_start));
+    const int num_input_shards = input_layout->num_shards_for_dim(input_start);
 
     // Decide on the sharding of the input for this segment.
     // If the input is already sharded, we try to keep this sharding (unless
@@ -737,31 +741,32 @@ StatusOr<mlir::Operation*> ReshapeSPMDExpander::ExpandOp(mlir::Operation* op) {
     // we could 'preshard' the input on this dimension before the reshape.
     // This is unlikely to have any major gains in performance.
     if (global_output_shape[output_start] % num_input_shards != 0) {
-      tgt_input_layout[input_start].set_sharding_spec(Layout::kUnshardedDim);
-      tgt_output_layout[output_start].set_sharding_spec(Layout::kUnshardedDim);
+      tgt_input_layout[input_start] = Layout::kUnshardedDim;
+      tgt_output_layout[output_start] = Layout::kUnshardedDim;
       local_reshape_const.emplace_back(global_output_shape[output_start]);
     } else {
-      tgt_input_layout[input_start] = input_layout->dim(input_start);
-      tgt_output_layout[output_start] = input_layout->dim(input_start);
+      tgt_input_layout[input_start] = input_layout->sharding_spec(input_start);
+      tgt_output_layout[output_start] =
+          input_layout->sharding_spec(input_start);
       local_reshape_const.emplace_back(global_output_shape[output_start] /
                                        num_input_shards);
     }
 
     for (int j = input_start + 1; j < input_segment_end[i]; ++j)
-      tgt_input_layout[j].set_sharding_spec(Layout::kUnshardedDim);
+      tgt_input_layout[j] = Layout::kUnshardedDim;
     for (int j = output_start + 1; j < output_segment_end[i]; ++j) {
       local_reshape_const.emplace_back(global_output_shape[j]);
-      tgt_output_layout[j].set_sharding_spec(Layout::kUnshardedDim);
+      tgt_output_layout[j] = Layout::kUnshardedDim;
     }
   }
 
   // Fill any remaining dimensions of size 1 and sharding dim on the end of the
   // layout.
   for (int j = input_segment_end.back(); j < tgt_input_layout.size(); ++j)
-    tgt_input_layout[j].set_sharding_spec(Layout::kUnshardedDim);
+    tgt_input_layout[j] = Layout::kUnshardedDim;
   for (int j = output_segment_end.back(); j < tgt_output_layout.size(); ++j) {
     local_reshape_const.emplace_back(1);
-    tgt_output_layout[j].set_sharding_spec(Layout::kUnshardedDim);
+    tgt_output_layout[j] = Layout::kUnshardedDim;
   }
 
   TF_ASSIGN_OR_RETURN(
@@ -772,9 +777,9 @@ StatusOr<mlir::Operation*> ReshapeSPMDExpander::ExpandOp(mlir::Operation* op) {
       Layout::GetLayout(tgt_output_layout, input_layout->mesh()));
 
   auto reshape_op = mlir::cast<mlir::TF::ReshapeOp>(op);
-  TF_ASSIGN_OR_RETURN(
-      mlir::Value new_input,
-      EmitRelayout(reshape_op.tensor(), *input_layout, desired_input_layout));
+  TF_ASSIGN_OR_RETURN(mlir::Value new_input,
+                      EmitRelayout(reshape_op.getTensor(), *input_layout,
+                                   desired_input_layout));
 
   mlir::OpBuilder builder(op);
 
@@ -787,11 +792,11 @@ StatusOr<mlir::Operation*> ReshapeSPMDExpander::ExpandOp(mlir::Operation* op) {
       mlir::DenseIntElementsAttr::get(new_shape, local_reshape_const);
   auto new_reshape_const_op =
       builder.create<mlir::TF::ConstOp>(DT_LOC(op), const_attr);
-  mlir::TF::ReshapeOp new_reshape_op = builder.create<mlir::TF::ReshapeOp>(
-      op->getLoc(), new_input, new_reshape_const_op);
+  mlir::TF::ReshapeOp new_reshape_op = mlir::TF::ReshapeOp::create(
+      builder, op->getLoc(), new_input, new_reshape_const_op);
 
   TF_ASSIGN_OR_RETURN(auto final_output,
-                      EmitRelayout(new_reshape_op.output(),
+                      EmitRelayout(new_reshape_op.getOutput(),
                                    desired_output_layout, *output_layout));
 
   op->getResult(0).replaceAllUsesWith(final_output);
@@ -807,10 +812,10 @@ StatusOr<llvm::DenseMap<int, Layout>> ReshapeSPMDExpander::ComputeLayoutForward(
   auto reshape_op = mlir::cast<mlir::TF::ReshapeOp>(op);
   TF_ASSIGN_OR_RETURN(
       auto input_shape,
-      GetShapeOfValue(reshape_op.tensor(), /*fail_on_dynamic=*/true));
+      GetShapeOfValue(reshape_op.getTensor(), /*fail_on_dynamic=*/true));
   TF_ASSIGN_OR_RETURN(
       auto output_shape,
-      GetShapeOfValue(reshape_op.output(), /*fail_on_dynamic=*/true));
+      GetShapeOfValue(reshape_op.getOutput(), /*fail_on_dynamic=*/true));
 
   llvm::SmallVector<int64_t, 4> input_segment_start;
   llvm::SmallVector<int64_t, 4> input_segment_end;
@@ -840,10 +845,10 @@ ReshapeSPMDExpander::ComputeLayoutBackward(
   auto reshape_op = mlir::cast<mlir::TF::ReshapeOp>(op);
   TF_ASSIGN_OR_RETURN(
       auto input_shape,
-      GetShapeOfValue(reshape_op.tensor(), /*fail_on_dynamic=*/true));
+      GetShapeOfValue(reshape_op.getTensor(), /*fail_on_dynamic=*/true));
   TF_ASSIGN_OR_RETURN(
       auto output_shape,
-      GetShapeOfValue(reshape_op.output(), /*fail_on_dynamic=*/true));
+      GetShapeOfValue(reshape_op.getOutput(), /*fail_on_dynamic=*/true));
 
   llvm::SmallVector<int64_t, 4> input_segment_start;
   llvm::SmallVector<int64_t, 4> input_segment_end;
@@ -883,11 +888,11 @@ StatusOr<mlir::Operation*> TransposeSPMDExpander::ExpandOp(
 
     auto transpose = mlir::cast<mlir::TF::TransposeOp>(op);
     llvm::SmallVector<int64, 4> perm;
-    TF_RETURN_IF_ERROR(ExtractConstVectorFromValue(transpose.perm(), &perm));
+    TF_RETURN_IF_ERROR(ExtractConstVectorFromValue(transpose.getPerm(), &perm));
 
     for (const auto& p : llvm::enumerate(perm)) {
-      if (operand_layout->dim(p.value()).sharding_spec() !=
-          output_layout->dim(p.index()).sharding_spec()) {
+      if (operand_layout->sharding_spec(p.value()) !=
+          output_layout->sharding_spec(p.index())) {
         return errors::InvalidArgument(
             "TransposeOp SPMD needs communication is not supported yet. \n "
             "operand layout: ",
@@ -909,7 +914,7 @@ TransposeSPMDExpander::ComputeLayoutForward(
 
   auto transpose = mlir::cast<mlir::TF::TransposeOp>(op);
   llvm::SmallVector<int64, 4> perm;
-  TF_RETURN_IF_ERROR(ExtractConstVectorFromValue(transpose.perm(), &perm));
+  TF_RETURN_IF_ERROR(ExtractConstVectorFromValue(transpose.getPerm(), &perm));
 
   const Layout input_layout = input_layouts.lookup(0);
   std::vector<std::string> output_layout_specs;
@@ -927,7 +932,7 @@ TransposeSPMDExpander::ComputeLayoutBackward(
     mlir::Operation* op, const llvm::DenseMap<int, Layout>& output_layouts) {
   auto transpose = mlir::cast<mlir::TF::TransposeOp>(op);
   llvm::SmallVector<int64, 4> perm;
-  TF_RETURN_IF_ERROR(ExtractConstVectorFromValue(transpose.perm(), &perm));
+  TF_RETURN_IF_ERROR(ExtractConstVectorFromValue(transpose.getPerm(), &perm));
   TF_ASSIGN_OR_RETURN(const Mesh mesh, ExtractDeviceMeshEnclosingCluster(op));
 
   llvm::DenseMap<int, Layout> input_layouts(transpose->getNumOperands());
@@ -957,32 +962,32 @@ TransposeSPMDExpander::ComputeLayoutBackward(
 
 namespace {
 
-Status RelayoutOneHotInput(const absl::optional<Layout>& input_layout,
-                           const absl::optional<Layout>& output_layout,
-                           const int axis, mlir::TF::OneHotOp& one_hot) {
+absl::Status RelayoutOneHotInput(const absl::optional<Layout>& input_layout,
+                                 const absl::optional<Layout>& output_layout,
+                                 const int axis, mlir::TF::OneHotOp& one_hot) {
   if (!input_layout || !output_layout)
     return errors::InvalidArgument(
         "layout for tf.OneHot operation inputs and outputs must be known before"
         " SPMD expansion. Consider adding Relayout() op to specify the "
         "layout.");
 
-  std::vector<ShardingSpec> sharding_specs(input_layout->rank());
+  std::vector<std::string> sharding_specs(input_layout->rank());
   for (int i = 0; i < input_layout->rank(); ++i) {
     if (i < axis)
-      sharding_specs[i] = output_layout->dim(i);
+      sharding_specs[i] = output_layout->sharding_spec(i);
     else
-      sharding_specs[i] = output_layout->dim(i + 1);
+      sharding_specs[i] = output_layout->sharding_spec(i + 1);
   }
   TF_ASSIGN_OR_RETURN(const Layout new_input_layout,
                       Layout::GetLayout(sharding_specs, input_layout->mesh()));
 
   TF_ASSIGN_OR_RETURN(
       mlir::Value new_input,
-      EmitRelayout(one_hot.indices(), *input_layout, new_input_layout));
+      EmitRelayout(one_hot.getIndices(), *input_layout, new_input_layout));
 
   one_hot->setOperand(0, new_input);
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -996,7 +1001,7 @@ StatusOr<mlir::Operation*> OneHotSPMDExpander::ExpandOp(mlir::Operation* op) {
 
   TF_ASSIGN_OR_RETURN(const auto output_layout,
                       ExtractSingleLayoutFromOp(one_hot_op));
-  int axis = one_hot_op.axisAttr().getInt();
+  int axis = one_hot_op.getAxisAttr().getInt();
   if (axis == -1) axis = output_layout->rank() - 1;
 
   // For tf.OneHot, relayout input so that it matches the output layout (outside
@@ -1005,7 +1010,7 @@ StatusOr<mlir::Operation*> OneHotSPMDExpander::ExpandOp(mlir::Operation* op) {
       RelayoutOneHotInput(input_layout, output_layout, axis, one_hot_op));
 
   const int num_shards = output_layout->num_shards()[axis];
-  const auto depth = ExtractConstIntFromValue(one_hot_op.depth());
+  const auto depth = ExtractConstIntFromValue(one_hot_op.getDepth());
   const bool depth_statically_divisible_by_sharding =
       (depth.ok() && (*depth) % num_shards == 0);
 
@@ -1041,35 +1046,37 @@ StatusOr<mlir::Operation*> OneHotSPMDExpander::ExpandOp(mlir::Operation* op) {
     const int mesh_dim_index =
         output_layout->mesh().GetMeshDimIndexWithName(mesh_dim_name);
 
-    mlir::TF::SliceOp selected_sharding_at_dimension = builder.create<
-        mlir::TF::SliceOp>(
-        one_hot_op.getLoc(),
-        mlir::RankedTensorType::get({1, 1}, mesh_coordinates.getType()
-                                                .cast<mlir::TensorType>()
-                                                .getElementType()),
-        /*input=*/mesh_coordinates,
-        /*begin=*/IntConst(builder, one_hot_op.getLoc(), {0, mesh_dim_index}),
-        /*size=*/IntConst(builder, one_hot_op.getLoc(), {1, 1}));
+    mlir::TF::SliceOp selected_sharding_at_dimension =
+        mlir::TF::SliceOp::create(
+            builder, one_hot_op.getLoc(),
+            mlir::RankedTensorType::get(
+                {1, 1}, mlir::cast<mlir::TensorType>(mesh_coordinates.getType())
+                            .getElementType()),
+            /*input=*/mesh_coordinates,
+            /*begin=*/
+            IntConst(builder, one_hot_op.getLoc(), {0, mesh_dim_index}),
+            /*size=*/IntConst(builder, one_hot_op.getLoc(), {1, 1}));
 
     // Reshape the sliced shape (1,1) tensor to shape 0 scalar.
     auto scalar_size_type =
         mlir::RankedTensorType::get({}, builder.getIntegerType(32));
     mlir::Value scalar_shape = mlir::TF::collection_ops_util::GetR1Const(
         scalar_size_type.getShape(), builder, one_hot_op->getLoc());
-    mlir::Value selected_sharding_scalar_value =
-        builder.create<mlir::TF::ReshapeOp>(
-            one_hot_op.getLoc(), mlir::ArrayRef<mlir::Type>{scalar_size_type},
-            mlir::ArrayRef<mlir::Value>{selected_sharding_at_dimension.output(),
-                                        scalar_shape},
-            mlir::ArrayRef<mlir::NamedAttribute>{});
+    mlir::Value selected_sharding_scalar_value = mlir::TF::ReshapeOp::create(
+        builder, one_hot_op.getLoc(),
+        mlir::ArrayRef<mlir::Type>{scalar_size_type},
+        mlir::ArrayRef<mlir::Value>{selected_sharding_at_dimension.getOutput(),
+                                    scalar_shape},
+        mlir::ArrayRef<mlir::NamedAttribute>{});
 
     // `new_indices` =  `original_indices` - `selected_sharding_scalar_value` *
     // (depth/num_shards)
-    mlir::Value id_offset = builder.create<mlir::TF::MulOp>(
-        one_hot_op->getLoc(), new_depth, selected_sharding_scalar_value);
-    mlir::Value original_indices = one_hot_op.indices();
-    mlir::Value new_indices = builder.create<mlir::TF::SubOp>(
-        one_hot_op->getLoc(), original_indices, id_offset);
+    mlir::Value id_offset =
+        mlir::TF::MulOp::create(builder, one_hot_op->getLoc(), new_depth,
+                                selected_sharding_scalar_value);
+    mlir::Value original_indices = one_hot_op.getIndices();
+    mlir::Value new_indices = mlir::TF::SubOp::create(
+        builder, one_hot_op->getLoc(), original_indices, id_offset);
 
     // Replace onehot operation inputs with mutated `new_depth` and `new_input`
     // tensors so that local tensors can be calculated directly without
@@ -1086,8 +1093,8 @@ StatusOr<llvm::DenseMap<int, Layout>> OneHotSPMDExpander::ComputeLayoutForward(
     return llvm::DenseMap<int, Layout>();
 
   auto one_hot = mlir::dyn_cast<mlir::TF::OneHotOp>(op);
-  int axis = one_hot.axis();
-  if (axis == -1) axis = ValueRank(one_hot.indices());
+  int axis = one_hot.getAxis();
+  if (axis == -1) axis = ValueRank(one_hot.getIndices());
   TF_ASSIGN_OR_RETURN(auto mesh, ExtractDeviceMeshEnclosingCluster(op));
 
   const Layout indices_layout = input_layouts.lookup(0);
@@ -1111,8 +1118,8 @@ StatusOr<llvm::DenseMap<int, Layout>> OneHotSPMDExpander::ComputeLayoutForward(
 StatusOr<llvm::DenseMap<int, Layout>> OneHotSPMDExpander::ComputeLayoutBackward(
     mlir::Operation* op, const llvm::DenseMap<int, Layout>& output_layouts) {
   auto one_hot = mlir::dyn_cast<mlir::TF::OneHotOp>(op);
-  int axis = one_hot.axis();
-  if (axis == -1) axis = ValueRank(one_hot.indices());
+  int axis = one_hot.getAxis();
+  if (axis == -1) axis = ValueRank(one_hot.getIndices());
   TF_ASSIGN_OR_RETURN(auto mesh, ExtractDeviceMeshEnclosingCluster(op));
 
   llvm::DenseMap<int, Layout> input_layouts(one_hot->getNumOperands());
@@ -1195,8 +1202,8 @@ StatusOr<mlir::Operation*> ShapeSPMDExpander::ExpandOp(mlir::Operation* op) {
     mlir::OpBuilder builder(op->getBlock(), ++mlir::Block::iterator(op));
     auto num_shards =
         IntConst(builder, op->getLoc(), input_layout->num_shards());
-    auto global_shape = builder.create<mlir::TF::MulOp>(
-        op->getLoc(), op->getResult(i), num_shards);
+    auto global_shape = mlir::TF::MulOp::create(builder, op->getLoc(),
+                                                op->getResult(i), num_shards);
 
     op->getResult(i).replaceAllUsesExcept(
         global_shape.getResult(),

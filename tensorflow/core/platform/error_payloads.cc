@@ -15,20 +15,23 @@ limitations under the License.
 
 #include "tensorflow/core/platform/error_payloads.h"
 
-namespace tensorflow {
+#include "absl/status/status.h"
+#include "absl/strings/cord.h"
+#include "tensorflow/core/protobuf/core_platform_payloads.pb.h"
+
+namespace tsl {
 
 using ::tensorflow::core::platform::ErrorSourceProto;
 
 void OkOrSetErrorCounterPayload(
-    const ErrorSourceProto::ErrorSource& error_source,
-    tensorflow::Status& status) {
+    const ErrorSourceProto::ErrorSource& error_source, absl::Status& status) {
   if (!status.ok() &&
       !status.GetPayload(tensorflow::kErrorSource).has_value()) {
     ErrorSourceProto error_source_proto;
     error_source_proto.set_error_source(error_source);
     status.SetPayload(tensorflow::kErrorSource,
-                      error_source_proto.SerializeAsString());
+                      absl::Cord(error_source_proto.SerializeAsString()));
   }
 }
 
-}  // namespace tensorflow
+}  // namespace tsl

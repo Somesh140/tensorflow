@@ -19,7 +19,7 @@ limitations under the License.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "flatbuffers/flatbuffers.h"  // from @flatbuffers
-#include "tensorflow/lite/interpreter.h"
+#include "tensorflow/lite/core/interpreter.h"
 #include "tensorflow/lite/kernels/test_util.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
@@ -51,7 +51,7 @@ TEST(ZerosLikeOpModel, ZerosLikeFloat) {
   m.PopulateTensor<float>(m.input(), {-2.0, -1.0, 0.0, 1.0, 2.0, 3.0});
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
   EXPECT_THAT(m.ExtractVector<float>(m.output()),
-              ElementsAreArray({0.0, 0.0, 0.0, 0.0, 0.0, 0.0}));
+              Pointwise(FloatingPointEq(), {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}));
   EXPECT_THAT(m.GetTensorShape(m.output()), ElementsAreArray({2, 3}));
 }
 

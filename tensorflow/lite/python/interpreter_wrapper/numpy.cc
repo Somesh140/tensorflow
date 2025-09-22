@@ -13,10 +13,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#define TFLITE_IMPORT_NUMPY  // See numpy.h for explanation.
-#include "tensorflow/lite/python/interpreter_wrapper/numpy.h"
-
 #include <memory>
+
+#define TFLITE_IMPORT_NUMPY  // See numpy.h for explanation.
+#include "tensorflow/lite/core/c/c_api_types.h"
+#include "tensorflow/lite/python/interpreter_wrapper/numpy.h"
 
 namespace tflite {
 namespace python {
@@ -38,6 +39,9 @@ int TfLiteTypeToPyArrayType(TfLiteType tf_lite_type) {
       return NPY_FLOAT32;
     case kTfLiteFloat16:
       return NPY_FLOAT16;
+    case kTfLiteBFloat16:
+      // TODO(b/329491949): Supports other ml_dtypes user-defined types.
+      return NPY_USERDEF;
     case kTfLiteFloat64:
       return NPY_FLOAT64;
     case kTfLiteInt32:
@@ -48,6 +52,9 @@ int TfLiteTypeToPyArrayType(TfLiteType tf_lite_type) {
       return NPY_UINT16;
     case kTfLiteInt16:
       return NPY_INT16;
+    case kTfLiteInt4:
+      // TODO(b/246806634): NPY_INT4 currently doesn't exist
+      return NPY_BYTE;
     case kTfLiteUInt8:
       return NPY_UINT8;
     case kTfLiteInt8:
@@ -72,7 +79,7 @@ int TfLiteTypeToPyArrayType(TfLiteType tf_lite_type) {
       // Avoid default so compiler errors created when new types are made.
   }
   return NPY_NOTYPE;
-}
+}  // NOLINT(direct import ndarraytypes.h cannot be used here)
 
 TfLiteType TfLiteTypeFromPyType(int py_type) {
   switch (py_type) {
@@ -88,6 +95,8 @@ TfLiteType TfLiteTypeFromPyType(int py_type) {
       return kTfLiteUInt32;
     case NPY_INT16:
       return kTfLiteInt16;
+    case NPY_UINT16:
+      return kTfLiteUInt16;
     case NPY_UINT8:
       return kTfLiteUInt8;
     case NPY_INT8:
@@ -106,9 +115,13 @@ TfLiteType TfLiteTypeFromPyType(int py_type) {
       return kTfLiteComplex64;
     case NPY_COMPLEX128:
       return kTfLiteComplex128;
+    case NPY_USERDEF:
+      // User-defined types are defined in ml_dtypes. (bfloat16, float8, etc.)
+      // For now, we only support bfloat16.
+      return kTfLiteBFloat16;
   }
   return kTfLiteNoType;
-}
+}  // NOLINT(direct import ndarraytypes.h cannot be used here)
 
 TfLiteType TfLiteTypeFromPyArray(PyArrayObject* array) {
   int pyarray_type = PyArray_TYPE(array);
@@ -164,6 +177,13 @@ bool FillStringBufferFromPyString(PyObject* value,
 
 bool FillStringBufferWithPyArray(PyObject* value,
                                  DynamicBuffer* dynamic_buffer) {
+  if (!PyArray_Check(value)) {
+    PyErr_Format(PyExc_ValueError,
+                 "Passed in value type is not a numpy array, got type %s.",
+                 value->ob_type->tp_name);
+    return false;
+  }
+
   PyArrayObject* array = reinterpret_cast<PyArrayObject*>(value);
   switch (PyArray_TYPE(array)) {
     case NPY_OBJECT:

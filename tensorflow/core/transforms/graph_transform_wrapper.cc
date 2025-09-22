@@ -16,8 +16,9 @@ limitations under the License.
 #include "tensorflow/core/transforms/graph_transform_wrapper.h"
 
 #include <initializer_list>
+#include <memory>
 
-#include "absl/memory/memory.h"
+#include "absl/status/status.h"
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/utils/error_util.h"
@@ -30,7 +31,7 @@ limitations under the License.
 namespace mlir {
 namespace tfg {
 
-tensorflow::Status RunTransformOnGraph(
+absl::Status RunTransformOnGraph(
     tensorflow::Graph* graph,
     const std::initializer_list<
         llvm::function_ref<std::unique_ptr<mlir::Pass>()>>& passes,
@@ -42,7 +43,7 @@ tensorflow::Status RunTransformOnGraph(
                       ImportGraphAndFunctionsToMlir(&context, debug_info,
                                                     *graph, graph->flib_def()));
 
-  PassManager pm(&context, mlir::PassManager::Nesting::Explicit);
+  PassManager pm((*module)->getName(), mlir::PassManager::Nesting::Explicit);
   // Construct passes.
   for (auto& pass : passes) pm.addPass(pass());
   mlir::StatusScopedDiagnosticHandler error_handler(&context);

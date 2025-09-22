@@ -1,9 +1,13 @@
-load("//tensorflow/compiler/mlir:glob_lit_test.bzl", "glob_lit_tests")
 load("//tensorflow:tensorflow.bzl", "if_oss", "tf_cc_test")
+load("//tensorflow/compiler/mlir:glob_lit_test.bzl", "glob_lit_tests")
 
-package(licenses = ["notice"])
+package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    licenses = ["notice"],
+)
 
 glob_lit_tests(
+    name = "all_tests",
     data = [":test_utilities"],
     driver = "//tensorflow/compiler/mlir:run_lit.sh",
     exclude = ["testdata/**"],
@@ -36,6 +40,7 @@ tf_cc_test(
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
         "//tensorflow/core/platform:resource_loader",
+        "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
         "@tf_runtime//:init_tfrt_dialects",
     ],

@@ -15,7 +15,7 @@
 """Tests for StructuredTensor."""
 
 import textwrap
-
+from typing import Optional
 from absl.testing import parameterized
 import numpy as np
 
@@ -25,13 +25,14 @@ from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import extension_type
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import sparse_tensor
+from tensorflow.python.framework import tensor
 from tensorflow.python.framework import tensor_shape
-from tensorflow.python.framework import tensor_spec
 from tensorflow.python.framework import test_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops.ragged import ragged_factory_ops
 from tensorflow.python.ops.ragged import ragged_tensor
 from tensorflow.python.ops.ragged import row_partition
+from tensorflow.python.ops.ragged.dynamic_ragged_shape import DynamicRaggedShape
 
 # TODO(b/173144447): remove when structured_array_ops is included in init.
 from tensorflow.python.ops.structured import structured_array_ops  # pylint: disable=unused-import
@@ -48,11 +49,13 @@ class _PrivateSpecialType(extension_type.ExtensionType):
 
 
 @dispatch.dispatch_for_types(array_ops.shape_v2, _PrivateSpecialType)
-def shape_v2_special(input: _PrivateSpecialType, out_type=dtypes.int32,  # pylint: disable=redefined-builtin
-                     name=None):
+def shape_v2_special(
+    input: _PrivateSpecialType,  # pylint: disable=redefined-builtin
+    out_type: dtypes.DType = None,
+    name: Optional[str] = None) -> DynamicRaggedShape:
   """Returns a DynamicRaggedShape containing the shape of the input."""
   del name
-  return array_ops.shape_v2(input.ragged, out_type)  # pylint: disable=protected-access
+  return array_ops.shape_v2(input.ragged, out_type)
 
 
 class _PrivateBrokenType(extension_type.ExtensionType):
@@ -60,8 +63,10 @@ class _PrivateBrokenType(extension_type.ExtensionType):
 
 
 @dispatch.dispatch_for_types(array_ops.shape_v2, _PrivateBrokenType)
-def shape_v2_broken(input: _PrivateBrokenType, out_type=dtypes.int32,  # pylint: disable=redefined-builtin
-                    name=None):
+def shape_v2_broken(
+    input: _PrivateBrokenType,  # pylint: disable=redefined-builtin
+    out_type: dtypes.DType = None,
+    name: Optional[str] = None) -> DynamicRaggedShape:
   """Returns a DynamicRaggedShape containing the shape of the input."""
   del name
   del input
@@ -256,6 +261,18 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
                   [[{"x": 1}], [{"x": 2}, {"x": 3}]]),
               "b": StructuredTensor.from_pyval(
                   [[[{"y": 1}]], [[], [{"y": 2}, {"y": 3}]]]),
+          },
+          "rank": 2,
+          "expected_shape": [2, None],  # ragged shape = [[*], [*, *]]
+      },
+      {
+          "testcase_name": "Rank2_WithDiffDTypes",
+          "fields": lambda: {
+              # Note: fields must have identical row_splits.
+              "a": ragged_factory_ops.constant_value(
+                  [[1], [2, 3]], row_splits_dtype=dtypes.int32),
+              "b": ragged_factory_ops.constant_value(
+                  [["a"], ["b", "c"]], row_splits_dtype=dtypes.int64),
           },
           "rank": 2,
           "expected_shape": [2, None],  # ragged shape = [[*], [*, *]]
@@ -547,6 +564,25 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
           },
           "expected_shape": [1, 2, 3, 1],  # inferred from field values.
       },
+      {
+          "testcase_name": "mixed_shape_dtype",
+          "fields": {},
+          "shape": [None, None],
+          "nrows": (lambda: constant_op.constant(2, dtypes.int32)),
+          "row_partitions": (
+              lambda: [row_partition.RowPartition.from_row_lengths([3, 4])]),
+          "expected_shape": [2, None],
+      },
+      {
+          "testcase_name": "mixed_shape_dtype_fields",
+          "fields": (lambda: {
+              "a": ragged_factory_ops.constant(
+                  [[1]], row_splits_dtype=dtypes.int32),
+              "b": ragged_factory_ops.constant(
+                  [[1]], row_splits_dtype=dtypes.int64)}),
+          "shape": [None, None],
+          "expected_shape": [1, None],
+      }
   ])  # pyformat: disable
   def testFromFields(self,
                      shape,
@@ -575,7 +611,7 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       for field, value in fields.items():
         self.assertIsInstance(
             struct.field_value(field),
-            (ops.Tensor, structured_tensor.StructuredTensor,
+            (tensor.Tensor, structured_tensor.StructuredTensor,
              ragged_tensor.RaggedTensor))
         self.assertAllEqual(struct.field_value(field), value)
 
@@ -660,41 +696,6 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
           err=ValueError,
           msg="Must specify row_partitions, a fully specified shape, "
           "or have fields if rank > 1"),
-      dict(
-          fields={},
-          shape=[None, None],
-          nrows=lambda: constant_op.constant(2, dtypes.int32),
-          row_partitions=lambda:
-          [row_partition.RowPartition.from_row_lengths([3, 4])],
-          err=ValueError,
-          msg="row_partition dtypes are inconsistent"),
-      dict(
-          fields=lambda: {
-              "a":
-                  ragged_factory_ops.constant([[1]],
-                                              row_splits_dtype=dtypes.int32),
-              "b":
-                  ragged_factory_ops.constant([[1]],
-                                              row_splits_dtype=dtypes.int64)
-          },
-          shape=[None, None],
-          err=ValueError,
-          msg="field values have incompatible row_partition dtypes"),
-      # Currently, this doesn't throw an error.
-      # That's fine.
-      # dict(
-      #     fields=lambda: {
-      #         "a":
-      #             array_ops.placeholder_with_default(np.array([1, 2, 3]),
-      #                                                None),
-      #         "b":
-      #             array_ops.placeholder_with_default(np.array([4, 5]), None)
-      #     },
-      #     validate=True,
-      #     shape=[None],
-      #     err=(ValueError, errors.InvalidArgumentError),
-      #     msg="Error in shape of b",
-      #     test_in_eager=False),
   ])
   def testFromFieldsErrors(self,
                            fields,
@@ -783,10 +784,14 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
         st4,
         structured_tensor.StructuredTensor.from_pyval(
             [[a, b], [c, d]],
-            structured_tensor.StructuredTensorSpec(
-                [2, 2], {
+            structured_tensor.StructuredTensor.Spec(
+                _ragged_shape=DynamicRaggedShape.Spec(
+                    row_partitions=[],
+                    static_inner_shape=[2, 2],
+                    dtype=dtypes.int64),
+                _fields={
                     "x":
-                        tensor_spec.TensorSpec([2, 2], dtypes.int32),
+                        tensor.TensorSpec([2, 2], dtypes.int32),
                     "y":
                         ragged_tensor.RaggedTensorSpec([2, 2, None],
                                                        dtypes.int32)
@@ -848,10 +853,13 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       {
           "testcase_name": "ScalarSimpleWithTypeSpec",
           "pyval": {"a": 12, "b": [1, 2, 3], "c": [[1, 2], [3]]},
-          "type_spec": structured_tensor.StructuredTensorSpec([], {
-              "a": tensor_spec.TensorSpec([], dtypes.int32),
-              "b": tensor_spec.TensorSpec([None], dtypes.int32),
-              "c": ragged_tensor.RaggedTensorSpec([None, None], dtypes.int32)}),
+          "type_spec": StructuredTensor.Spec._from_fields_and_rank(
+              fields={
+                  "a": tensor.TensorSpec([], dtypes.int32),
+                  "b": tensor.TensorSpec([None], dtypes.int32),
+                  "c": ragged_tensor.RaggedTensorSpec([None, None],
+                                                      dtypes.int32)},
+              rank=0),
           "expected": lambda: StructuredTensor.from_fields(shape=[], fields={
               "a": 12,
               "b": [1, 2, 3],
@@ -880,24 +888,32 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       {
           "testcase_name": "EmptyListWithTypeSpecAndFields",
           "pyval": [],
-          "type_spec": structured_tensor.StructuredTensorSpec([0], {
-              "a": tensor_spec.TensorSpec(None, dtypes.int32)}),
+          "type_spec": structured_tensor.StructuredTensor.Spec._from_fields_and_rank(
+              fields={"a": tensor.TensorSpec([0], dtypes.int32)},
+              rank=1),
           "expected": lambda: StructuredTensor.from_fields(shape=[0], fields={
               "a": []})
       },
       {
           "testcase_name": "EmptyListWithTypeSpecNoFieldsShape0_5",
           "pyval": [],
-          "type_spec": structured_tensor.StructuredTensorSpec([0, 5], {}),
+          "type_spec": StructuredTensor.Spec._from_shape(DynamicRaggedShape.Spec(
+              row_partitions=[],
+              static_inner_shape=[0, 5],
+              dtype=dtypes.int64)),
           "expected": lambda: StructuredTensor.from_fields(shape=[0, 5],
                                                            fields={})
       },
       {
           "testcase_name": "EmptyListWithTypeSpecNoFieldsShape1_0",
           "pyval": [[]],
-          "type_spec": structured_tensor.StructuredTensorSpec([1, 0], {}),
-          "expected": lambda: StructuredTensor.from_fields(shape=[1, 0],
-                                                           fields={})
+          "type_spec": StructuredTensor.Spec._from_shape(
+              DynamicRaggedShape.Spec(
+                  row_partitions=[],
+                  static_inner_shape=[1, 0],
+                  dtype=dtypes.int64)),
+          "expected": lambda: StructuredTensor.from_shape(
+              DynamicRaggedShape.from_lengths([1, 0]))
       },
       {
           "testcase_name": "VectorOfDict",
@@ -947,7 +963,7 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
           "pyval": [[{"a": 1}, {"a": 2}, {"a": 3},],
                     [{"a": 4}, {"a": 5}, {"a": 6}]],
           "type_spec": structured_tensor.StructuredTensorSpec([2, 3], {
-              "a": tensor_spec.TensorSpec(None, dtypes.int32)}),
+              "a": tensor.TensorSpec(None, dtypes.int32)}),
           "expected": lambda: StructuredTensor.from_fields(
               shape=[2, 3], fields={"a": [[1, 2, 3], [4, 5, 6]]})
       },
@@ -961,10 +977,13 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
         self.assertEqual(actual.to_pyval(), pyval)
 
   def testStructuredTensorSpecFactory(self):
-    spec = structured_tensor.StructuredTensorSpec([], {
-        "a": tensor_spec.TensorSpec([], dtypes.int32),
-        "b": tensor_spec.TensorSpec([None], dtypes.int32),
-        "c": ragged_tensor.RaggedTensorSpec([None, None], dtypes.int32)})
+    spec = StructuredTensor.Spec._from_fields_and_rank(
+        fields={
+            "a": tensor.TensorSpec([], dtypes.int32),
+            "b": tensor.TensorSpec([None], dtypes.int32),
+            "c": ragged_tensor.RaggedTensorSpec([None, None], dtypes.int32)
+        },
+        rank=0)
     self.assertEqual(spec.rank, 0)
 
   @parameterized.named_parameters([
@@ -1022,41 +1041,44 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
            msg="'b'"),
       dict(testcase_name="TypeSpecMismatch_DictKey",
            pyval={"a": 1},
-           type_spec=structured_tensor.StructuredTensorSpec(
-               shape=[1],
-               field_specs={"b": tensor_spec.TensorSpec([1], dtypes.int32)}),
+           type_spec=StructuredTensor.Spec._from_fields_and_rank(
+               fields={"b": tensor.TensorSpec([1], dtypes.int32)},
+               rank=1),
            msg=r"Value at \(\) does not match typespec"),
       dict(testcase_name="TypeSpecMismatch_ListDictKey",
            pyval=[{"a": 1}],
-           type_spec=structured_tensor.StructuredTensorSpec(
-               shape=[1],
-               field_specs={"b": tensor_spec.TensorSpec([1], dtypes.int32)}),
+           type_spec=StructuredTensor.Spec._from_fields_and_rank(
+               fields={"b": tensor.TensorSpec([1], dtypes.int32)},
+               rank=1),
            msg=r"Value at \(\) does not match typespec"),
       dict(testcase_name="TypeSpecMismatch_RankMismatch",
            pyval=[{"a": 1}],
-           type_spec=structured_tensor.StructuredTensorSpec(
-               shape=[],
-               field_specs={"a": tensor_spec.TensorSpec([], dtypes.int32)}),
+           type_spec=StructuredTensor.Spec._from_fields_and_rank(
+               fields={"a": tensor.TensorSpec([], dtypes.int32)},
+               rank=0),
            msg=r"Value at \(\) does not match typespec \(rank mismatch\)"),
       dict(testcase_name="TypeSpecMismatch_Scalar",
            pyval=0,
-           type_spec=structured_tensor.StructuredTensorSpec(
-               shape=[], field_specs={}),
+           type_spec=StructuredTensor.Spec._from_shape(
+               DynamicRaggedShape.Spec(
+                   row_partitions=[],
+                   static_inner_shape=[],
+                   dtype=dtypes.int64)),
            msg=r"Value at \(\) does not match typespec"),
       dict(testcase_name="TypeSpecMismatch_ListTensor",
            pyval={"a": [[1]]},
-           type_spec=structured_tensor.StructuredTensorSpec(
-               shape=[],
-               field_specs={"a": tensor_spec.TensorSpec([], dtypes.int32)}),
+           type_spec=StructuredTensor.Spec._from_fields_and_rank(
+               fields={"a": tensor.TensorSpec([], dtypes.int32)},
+               rank=0),
            msg=r"Value at \('a',\) does not match typespec"),
       dict(testcase_name="TypeSpecMismatch_ListTensorDeep",
            pyval={"a": {"b": [[1]]}},
-           type_spec=structured_tensor.StructuredTensorSpec(
-               shape=[],
-               field_specs={"a": structured_tensor.StructuredTensorSpec(
-                   shape=[],
-                   field_specs={"b": tensor_spec.TensorSpec([],
-                                                            dtypes.int32)})}),
+           type_spec=StructuredTensor.Spec._from_fields_and_rank(
+               fields={"a": StructuredTensor.Spec._from_fields_and_rank(
+                   fields={"b": tensor.TensorSpec([], dtypes.int32)},
+                   rank=0
+               )},
+               rank=0),
            msg=r"Value at \('a', 'b'\) does not match typespec"),
       dict(testcase_name="TypeSpecMismatch_ListTensorDeep_infer",
            pyval={"a": [{"b": [[1]]}, {"b": [["c"]]}]},
@@ -1072,9 +1094,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
            msg=r"Value at \(\) does not match typespec"),
       dict(testcase_name="TypeSpecMismatch_ListStruct",
            pyval=[[1]],
-           type_spec=structured_tensor.StructuredTensorSpec(
-               shape=[1, 1],
-               field_specs={"a": tensor_spec.TensorSpec([1, 1], dtypes.int32)}),
+           type_spec=StructuredTensor.Spec._from_fields_and_rank(
+               fields={"a": tensor.TensorSpec([1, 1], dtypes.int32)},
+               rank=2),
            msg=r"Value at \(\) does not match typespec"),
       dict(testcase_name="InconsistentDictionaryDepth",
            pyval=[{}, [{}]],
@@ -1259,8 +1281,15 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(result, expected)
 
   def testMergeDimsDetail_3D_0_1(self):
-    st = StructuredTensor.from_pyval(
-        [[[{"x": 1}, {"x": 2}], [{"x": 3}]], [[{"x": 4}]]])
+    st = StructuredTensor.from_pyval([[[{
+        "x": 1
+    }, {
+        "x": 2
+    }], [{
+        "x": 3
+    }]], [[{
+        "x": 4
+    }]]])
     result = st.merge_dims(0, 1)
     expected_shape = tensor_shape.TensorShape([3, None])
     self.assertTrue(expected_shape.is_compatible_with(result.shape))
@@ -1508,7 +1537,7 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
           {"a": 12, "b": {"c": 23}},
           {("b", "c"): 7},
       ),
-      # Multipe updates.
+      # Multiple updates.
       (
           {"a": 12, "b": {"c": 23}},
           {"a": 3, ("b", "c"): 7},
@@ -1600,7 +1629,7 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     pyval = {"a": 12, "b": {"c": 23, "d": {"e": 11}}}
     st = StructuredTensor.from_pyval(pyval)
 
-    # Try to set non-existant sub-structure.
+    # Try to set non-existent sub-structure.
     with self.assertRaisesRegex(
         ValueError, r"cannot create new sub-field.*\('b', 'x'\).*is not set"):
       st.with_updates({("b", "x", "e"): 5})
@@ -1715,9 +1744,13 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertLen(st3.row_partitions, st3.rank - 1)
 
   def test_structured_tensor_spec_shape_property(self):
-    spec = structured_tensor.StructuredTensorSpec([1, 2], {})
+    spec = StructuredTensor.Spec._from_shape(
+        DynamicRaggedShape.Spec(
+            row_partitions=[], static_inner_shape=[1, 2], dtype=dtypes.int64))
     self.assertEqual(spec.shape.as_list(), [1, 2])
-    spec = structured_tensor.StructuredTensorSpec([None], {})
+    spec = StructuredTensor.Spec._from_shape(
+        DynamicRaggedShape.Spec(
+            row_partitions=[], static_inner_shape=[None], dtype=dtypes.int64))
     self.assertEqual(spec.shape.as_list(), [None])
 
   def test_dynamic_ragged_shape_init_vector(self):

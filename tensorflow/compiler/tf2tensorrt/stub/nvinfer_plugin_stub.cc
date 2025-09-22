@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/platform/env.h"
-#include "tensorflow/stream_executor/platform/dso_loader.h"
+#include "tsl/platform/dso_loader.h"
 #include "third_party/tensorrt/NvInferPlugin.h"
 
 // Implements the TensorRT API by forwarding to TensorRT loaded from the DSO.
@@ -25,10 +25,9 @@ void* GetDsoHandle() {
   return nullptr;
 #else
   static auto handle = []() -> void* {
-    auto handle_or =
-        stream_executor::internal::DsoLoader::GetNvInferPluginDsoHandle();
+    auto handle_or = tsl::internal::DsoLoader::GetNvInferPluginDsoHandle();
     if (!handle_or.ok()) return nullptr;
-    return handle_or.ValueOrDie();
+    return handle_or.value();
   }();
   return handle;
 #endif

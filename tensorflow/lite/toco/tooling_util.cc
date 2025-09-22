@@ -15,25 +15,31 @@ limitations under the License.
 #include "tensorflow/lite/toco/tooling_util.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <iterator>
+#include <memory>
 #include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_replace.h"
-#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
 #include "re2/re2.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/lite/toco/dump_graphviz.h"
 #include "tensorflow/lite/toco/model_flags.pb.h"
 #include "tensorflow/lite/toco/toco_graphviz_dump_options.h"
+#include "tensorflow/lite/toco/types.pb.h"
 
 namespace toco {
 
@@ -584,7 +590,7 @@ void DumpGraphvizVideoFrame(const Model& model) {
             dump_options.dump_graphviz,
             toco::port::StringF("toco_video_%05d.dot", dump_id)),
         graphviz_dump, port::file::Defaults());
-    QCHECK(result.ok()) << result.error_message();
+    QCHECK(result.ok()) << result.message();
     dump_id++;
   }
 }
@@ -604,7 +610,7 @@ void LogDump(int log_level, const std::string& message, const Model& model) {
             absl::StrCat("toco_", absl::StrReplaceAll(message, {{" ", "_"}}),
                          ".dot")),
         graphviz_dump, port::file::Defaults());
-    QCHECK(result.ok()) << result.error_message();
+    QCHECK(result.ok()) << result.message();
   }
 
   if (!VLOG_IS_ON(log_level)) {

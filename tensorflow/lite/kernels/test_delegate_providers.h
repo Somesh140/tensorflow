@@ -66,6 +66,16 @@ class KernelTestDelegateProviders {
 
   // An option name to use Simple Memory Allocator.
   static constexpr char kUseSimpleAllocator[] = "use_simple_allocator";
+  // An option name to provide acceleration test config file.
+  static constexpr char kAccelerationTestConfigPath[] =
+      "acceleration_test_config_path";
+
+  // An option name to allow fp16 precision for fp32 computation.
+  static constexpr char kAllowFp16PrecisionForFp32[] =
+      "allow_fp16_precision_for_fp32";
+
+  // An option name to provide directory path for TFLite model dump.
+  static constexpr char kDumpTFLiteModelDir[] = "dump_tflite_model_dir";
 
  private:
   // Contain delegate-related parameters that are initialized from command-line

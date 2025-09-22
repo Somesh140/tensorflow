@@ -15,14 +15,21 @@ limitations under the License.
 
 #include "tensorflow/dtensor/mlir/expansions/broadcast_to_spmd_expander.h"
 
+#include <cstdint>
 #include <string>
-#include <utility>
+#include <vector>
 
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops_a_m.h"
-#include "tensorflow/compiler/mlir/tensorflow/utils/convert_tensor.h"
-#include "tensorflow/dtensor/cc/constants.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/dtensor/cc/dstatus.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/collectives.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
@@ -37,26 +44,28 @@ namespace dtensor {
 StatusOr<mlir::Operation*> BroadcastToSPMDExpander::ExpandOp(
     mlir::Operation* op) {
   auto broadcast_op = llvm::cast<mlir::TF::BroadcastToOp>(op);
-  TF_ASSIGN_OR_RETURN(const Layout shape_layout,
-                      ExtractRequiredLayoutFromOperand(broadcast_op.shape()));
+  TF_ASSIGN_OR_RETURN(
+      const Layout shape_layout,
+      ExtractRequiredLayoutFromOperand(broadcast_op.getShape()));
   if (!shape_layout.IsFullyReplicated()) {
     return errors::InvalidArgument(
         "Error during BroadcastOp SPMD Expansion. Shape input of broadcast op "
         "must be fully replicated.");
   }
 
-  TF_ASSIGN_OR_RETURN(const Layout input_layout,
-                      ExtractRequiredLayoutFromOperand(broadcast_op.input()));
+  TF_ASSIGN_OR_RETURN(
+      const Layout input_layout,
+      ExtractRequiredLayoutFromOperand(broadcast_op.getInput()));
   TF_ASSIGN_OR_RETURN(const Layout output_layout,
                       ExtractRequiredSingleLayoutFromOp(broadcast_op));
 
   TF_ASSIGN_OR_RETURN(
       llvm::ArrayRef<int64_t> input_global_size,
-      GetGlobalShapeOfValueFromDTensorLayout(broadcast_op.input()));
+      GetGlobalShapeOfValueFromDTensorLayout(broadcast_op.getInput()));
 
   llvm::SmallVector<int64_t, 4> broadcast_to_shape;
   TF_RETURN_IF_ERROR(ExtractConstVectorFromValue(
-      GetForwardedDTensorLayoutInput(broadcast_op.shape()),
+      GetForwardedDTensorLayoutInput(broadcast_op.getShape()),
       &broadcast_to_shape));
 
   // Input to BroadcastTo op requires all to all if non-broadcasted-dimensions
@@ -81,7 +90,7 @@ StatusOr<mlir::Operation*> BroadcastToSPMDExpander::ExpandOp(
   // Insert all-to-all operations just before Broadcast op to ensure all inputs
   // in correct local values.
   mlir::OpBuilder builder(op);
-  mlir::Value input_data = broadcast_op.input();
+  mlir::Value input_data = broadcast_op.getInput();
   TF_ASSIGN_OR_RETURN(const Mesh mesh, ExtractDeviceMeshEnclosingCluster(op));
   const Layout all_to_all_input_layout =
       Layout::ReplicatedOnMesh(mesh, input_layout.rank());
@@ -132,10 +141,10 @@ BroadcastToSPMDExpander::ComputeLayoutForward(
   auto broadcast_op = llvm::cast<mlir::TF::BroadcastToOp>(op);
   TF_ASSIGN_OR_RETURN(
       const auto broadcasted_output_shape,
-      GetShapeOfValue(broadcast_op.output(), /*fail_on_dynamic=*/true));
+      GetShapeOfValue(broadcast_op.getOutput(), /*fail_on_dynamic=*/true));
   TF_ASSIGN_OR_RETURN(
       const auto input_shape,
-      GetShapeOfValue(broadcast_op.input(), /*fail_on_dynamic=*/true));
+      GetShapeOfValue(broadcast_op.getInput(), /*fail_on_dynamic=*/true));
 
   // Broadcasting works from trailing dimensions and dimensions are broadcasted
   // in forward direction.
@@ -178,10 +187,10 @@ BroadcastToSPMDExpander::ComputeLayoutBackward(
   auto broadcast_op = llvm::cast<mlir::TF::BroadcastToOp>(op);
   TF_ASSIGN_OR_RETURN(
       const auto broadcasted_output_shape,
-      GetShapeOfValue(broadcast_op.output(), /*fail_on_dynamic=*/true));
+      GetShapeOfValue(broadcast_op.getOutput(), /*fail_on_dynamic=*/true));
   TF_ASSIGN_OR_RETURN(
       const auto input_shape,
-      GetShapeOfValue(broadcast_op.input(), /*fail_on_dynamic=*/true));
+      GetShapeOfValue(broadcast_op.getInput(), /*fail_on_dynamic=*/true));
 
   // Broadcasting works from trailing dimensions and dimensions are broadcasted
   // in forward direction.
@@ -189,19 +198,17 @@ BroadcastToSPMDExpander::ComputeLayoutBackward(
   const int input_shape_rank = input_shape.size();
   const int broadcasted_dimensions = output_shape_rank - input_shape_rank;
 
-  LayoutProto layout_proto;
-  *layout_proto.mutable_mesh_config() = mesh.ToProto();
+  std::vector<std::string> sharding_specs;
   for (int i = 0; i < input_shape_rank; ++i) {
     if (input_shape[i] == 1) {
-      layout_proto.add_sharding_specs()->set_sharding_spec(
-          Layout::kUnshardedDim);
+      sharding_specs.push_back(Layout::kUnshardedDim);
     } else {
-      layout_proto.add_sharding_specs()->set_sharding_spec(
+      sharding_specs.push_back(
           output_layout.sharding_spec(i + broadcasted_dimensions));
     }
   }
   TF_ASSIGN_OR_RETURN(Layout inferred_operand_layout,
-                      Layout::FromProto(layout_proto));
+                      Layout::GetLayout(sharding_specs, mesh));
   // `shape` input of BroadcastTo is always set as replicated.
   return llvm::DenseMap<int, Layout>(
       {{0, inferred_operand_layout},

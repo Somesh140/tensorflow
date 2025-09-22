@@ -15,17 +15,20 @@ limitations under the License.
 
 #include "tensorflow/dtensor/mlir/expansions/trivial_spmd_expander.h"
 
-#include "absl/strings/str_join.h"
+#include <cassert>
+
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 #include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
-#include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/core/platform/errors.h"
-#include "tensorflow/dtensor/cc/constants.h"
 #include "tensorflow/dtensor/cc/dstatus.h"
+#include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
-#include "tensorflow/dtensor/mlir/spmd_expander_common.h"
+#include "tensorflow/dtensor/mlir/shape_utils.h"
 #include "tensorflow/dtensor/mlir/value_utils.h"
 
 namespace tensorflow {
@@ -38,7 +41,7 @@ StatusOr<mlir::Operation*> TerminatorSPMDExpander::ExpandOp(
   auto output_types = llvm::to_vector<8>(terminator_op.getOperandTypes());
   assert(output_types.size() == parent_op->getNumResults());
 
-  for (auto& output_type_and_index : llvm::enumerate(output_types)) {
+  for (const auto& output_type_and_index : llvm::enumerate(output_types)) {
     const int index = output_type_and_index.index();
     const auto& type = output_type_and_index.value();
     parent_op->getResult(index).setType(type);

@@ -21,7 +21,7 @@ limitations under the License.
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/Dialect/Quant/QuantTypes.h"  // from @llvm-project
+#include "mlir/Dialect/Quant/IR/QuantTypes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
@@ -147,7 +147,7 @@ struct FoldQuantizedI32ToFloat : public OpRewritePattern<TFL::DequantizeOp> {
   LogicalResult matchAndRewrite(TFL::DequantizeOp dequant_op,
                                 PatternRewriter& rewriter) const override {
     // We only fold i32 -> float pattern.
-    auto input = dequant_op.input().getDefiningOp();
+    auto input = dequant_op.getInput().getDefiningOp();
     if (!input) return failure();
 
     auto input_dequant = llvm::dyn_cast_or_null<TFL::QConstOp>(input);
@@ -156,19 +156,19 @@ struct FoldQuantizedI32ToFloat : public OpRewritePattern<TFL::DequantizeOp> {
     if (!IsQI32Type(input_dequant.getType())) return failure();
 
     auto output_type =
-        dequant_op.output().getType().dyn_cast_or_null<ShapedType>();
+        mlir::dyn_cast_or_null<ShapedType>(dequant_op.getOutput().getType());
     if (!output_type || !output_type.getElementType().isF32()) return failure();
 
-    auto input_type = input_dequant.getType().dyn_cast<ShapedType>();
+    auto input_type = mlir::dyn_cast<ShapedType>(input_dequant.getType());
     // TODO(renjieliu): support UniformQuantizedPerAxisType.
-    auto q_type = input_type.getElementType()
-                      .dyn_cast_or_null<quant::UniformQuantizedType>();
+    auto q_type = mlir::dyn_cast_or_null<quant::UniformQuantizedType>(
+        input_type.getElementType());
     if (!q_type) return failure();
 
     const float scale = q_type.getScale();
     const float zp = q_type.getZeroPoint();
 
-    auto input_values = input_dequant.value();
+    auto input_values = input_dequant.getValue();
 
     // mapValues always takes a function returning APInt, even when the output
     // is actually float.
@@ -178,14 +178,14 @@ struct FoldQuantizedI32ToFloat : public OpRewritePattern<TFL::DequantizeOp> {
 
       const float real = (int_value - zp) * scale;
 
-      auto real_int = absl::bit_cast<int32_t>(real);
+      auto real_int = absl::bit_cast<uint32_t>(real);
       return APInt(/*numBits=*/32, real_int);
     };
 
     auto dequant_values =
-        input_values.cast<DenseIntOrFPElementsAttr>().mapValues(
-            FloatType::getF32(rewriter.getContext()),
-            llvm::function_ref<DequantizeFuncType>(dequantize_func));
+        mlir::cast<DenseIntOrFPElementsAttr>(input_values)
+            .mapValues(Float32Type::get(rewriter.getContext()),
+                       llvm::function_ref<DequantizeFuncType>(dequantize_func));
     rewriter.replaceOpWithNewOp<TFL::ConstOp>(dequant_op, dequant_op.getType(),
                                               dequant_values);
 
@@ -211,7 +211,7 @@ void OptimizeQuantizedOpToFloat(func::FuncOp func, MLIRContext* context) {
   patterns
       .add<FoldQuantizedI32ToFloat, FoldQuantizeDequantize, RemoveUnusedQuant>(
           context);
-  (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
+  (void)applyPatternsGreedily(func, std::move(patterns));
 }
 
 }  // namespace tac

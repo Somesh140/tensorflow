@@ -13,16 +13,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <algorithm>
+#include <cstdint>
+#include <numeric>
+#include <vector>
+
+#include "absl/container/inlined_vector.h"
+#include "absl/types/span.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "tensorflow/compiler/xla/client/xla_builder.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/literal.h"
+#include "xla/shape_util.h"
+#include "xla/xla_data.pb.h"
+#include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/op_requires.h"
+#include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/framework/types.pb.h"
+#include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/util/overflow.h"
 
 namespace tensorflow {
 namespace {
 
-void SpaceToBatch(XlaOpKernelContext* ctx, const xla::XlaOp& input,
+void SpaceToBatch(XlaOpKernelContext* ctx, const xla::XlaOp input,
                   DataType input_dtype, const TensorShape& input_tensor_shape,
                   absl::Span<const int64_t> block_shape,
                   const xla::Literal& paddings) {
@@ -40,7 +55,7 @@ void SpaceToBatch(XlaOpKernelContext* ctx, const xla::XlaOp& input,
 
   OP_REQUIRES(
       ctx,
-      paddings.shape().rank() == 2 &&
+      paddings.shape().dimensions().size() == 2 &&
           block_rank == xla::ShapeUtil::GetDimension(paddings.shape(), 0) &&
           2 == xla::ShapeUtil::GetDimension(paddings.shape(), 1),
       errors::InvalidArgument("paddings should have shape [", block_rank,

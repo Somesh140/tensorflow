@@ -40,11 +40,10 @@ def TFFramework_Dialect : Dialect {
   }];
 
   let useDefaultTypePrinterParser = 1;
-  let emitAccessorPrefix = kEmitAccessorPrefix_Raw;
 }
 
 def TFFramework_OpKernelContextType : DialectType<TFFramework_Dialect,
-    CPred<"$_self.isa<::mlir::kernel_gen::tf_framework::OpKernelContextType>()">,
+    CPred<"llvm::isa<::mlir::kernel_gen::tf_framework::OpKernelContextType>($_self)">,
           "op_kernel_construction">,
     BuildableType<"$_builder.getType<::mlir::kernel_gen::tf_framework::OpKernelContextType>()"> {
   let description = [{
@@ -54,7 +53,7 @@ def TFFramework_OpKernelContextType : DialectType<TFFramework_Dialect,
 }
 
 def TFFramework_JITCallableType : DialectType<TFFramework_Dialect, CPred<
-    "$_self.isa<::mlir::kernel_gen::tf_framework::JITCallableType>()">>,
+    "llvm::isa<::mlir::kernel_gen::tf_framework::JITCallableType>($_self)">>,
     BuildableType<"$_builder.getType<::mlir::kernel_gen::tf_framework::JITCallableType>()"> {
   let description = [{
     A `callable` represents the result of JIT compilation. Conceptually, it
@@ -108,7 +107,7 @@ def TFFramework_TFAllocOp : TFFramework_Op<"alloc", [
     }]>];
 
   let extraClassDeclaration = [{
-    MemRefType getType() { return getResult().getType().cast<MemRefType>(); }
+    MemRefType getType() { return llvm::cast<MemRefType>(getResult().getType()); }
     static constexpr StringRef kReuseOutputAttrName = "reuse_output";
     static constexpr StringRef kReuseInputCandidatesAttrName =
         "reuse_input_candidates";
@@ -183,7 +182,7 @@ def TFFramework_IsValidMemRefOp : TFFramework_Op<"is_valid_memref", []> {
 // NullContextOp
 //===----------------------------------------------------------------------===//
 def TFFramework_NullContextOp : TFFramework_Op<"null_context",
-    [NoSideEffect]> {
+    [Pure]> {
   let summary = "Creates a fake TF context that will be lowered to nullptr";
   let description = [{Needed for testing}];
   let results = (outs TFFramework_OpKernelContextType:$result);
@@ -253,7 +252,7 @@ def TFFramework_JITCompileOp : TFFramework_Op<"jit_compile", [SingleBlock]> {
 //===----------------------------------------------------------------------===//
 
 def TFFramework_JITCompileYieldOp : TFFramework_Op<"jit_compile_yield", [
-    NoSideEffect, ReturnLike, Terminator, HasParent<"JITCompileOp">]> {
+    Pure, ReturnLike, Terminator, HasParent<"JITCompileOp">]> {
   let summary = "Yields the results in a `tf_framework.jit_compile` op's body";
   let description = [{
     See `tf_framework.jit_compile`.
@@ -285,7 +284,6 @@ def TFFramework_JITCompileFromStrOp : TFFramework_Op<"jit_compile_from_str",
     StrAttr:$code,
     I64ArrayAttr:$tileSizes,
     I64ArrayAttr:$unrollFactors,
-    I64Attr:$maxSupportedRank,
     BoolAttr:$enableFtz,
     BoolAttr:$index64Bit,
     BoolAttr:$cpuCodegen
@@ -322,15 +320,15 @@ def TFFramework_JITExecuteOp : TFFramework_Op<"jit_execute", [
   let arguments = (ins
     Optional<TFFramework_OpKernelContextType>:$ctx,
     TFFramework_JITCallableType:$callable,
-    Variadic<AnyTypeOf<[AnyRankedOrUnrankedMemRef, AnyTensor]>>:$operands
+    Variadic<AnyTypeOf<[AnyRankedOrUnrankedMemRef, AnyTensor]>>:$inputs
   );
   let results = (outs
     Res<AnyTypeOf<[AnyRankedOrUnrankedMemRef, AnyTensor]> , "",
         [MemAlloc<DefaultResource>]>:$result);
 
   let assemblyFormat = [{
-    (`ctx` `(` $ctx^ `)`)? $callable `(` $operands `)` attr-dict
-        `:` type($operands) `->` type($result)
+    (`ctx` `(` $ctx^ `)`)? $callable `(` $inputs `)` attr-dict
+        `:` type($inputs) `->` type($result)
   }];
 }
 

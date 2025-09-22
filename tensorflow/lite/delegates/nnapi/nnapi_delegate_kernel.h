@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef TENSORFLOW_LITE_DELEGATES_NNAPI_NNAPI_DELEGATE_KERNEL_H_
 #define TENSORFLOW_LITE_DELEGATES_NNAPI_NNAPI_DELEGATE_KERNEL_H_
 
+#include <cstddef>
 #include <list>
 #include <map>
 #include <memory>
@@ -23,7 +24,7 @@ limitations under the License.
 #include <unordered_map>
 
 #include "tensorflow/lite/allocation.h"
-#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/core/c/common.h"
 #include "tensorflow/lite/delegates/nnapi/nnapi_delegate.h"
 #include "tensorflow/lite/delegates/nnapi/nnapi_delegate_plugin.h"
 #include "tensorflow/lite/nnapi/nnapi_implementation.h"
@@ -116,8 +117,8 @@ class NNFreeMappingUtil {
 // Manage NNAPI shared memory handle
 class NNMemory {
  public:
-  NNMemory(const NnApi* nnapi, const char* name, size_t size);
-
+  static std::unique_ptr<NNMemory> Create(const NnApi* nnapi, const char* name,
+                                          size_t size);
   ~NNMemory();
 
   ANeuralNetworksMemory* get_handle() { return nn_memory_handle_; }
@@ -125,6 +126,15 @@ class NNMemory {
   size_t get_byte_size() { return byte_size_; }
 
  private:
+  // Private constructor. Use Create() to create an instance.
+  NNMemory(const NnApi* nnapi, int fd, size_t byte_size, uint8_t* data_ptr,
+           ANeuralNetworksMemory* nn_memory_handle)
+      : nnapi_(nnapi),
+        fd_(fd),
+        byte_size_(byte_size),
+        data_ptr_(data_ptr),
+        nn_memory_handle_(nn_memory_handle) {};
+
   // NnApi instance to use. Not owned by this object.
   const NnApi* nnapi_;
   int fd_ = 0;
@@ -149,7 +159,7 @@ enum class NNAPIValidationFailureType : int {
   // is specified in the validation failure message.
   // For more details on each operator version see
   // the GetBuiltinOperatorVersion function in
-  // third_party/tensorflow/lite/tools/versioning/op_version.cc.
+  // tensorflow/compiler/mlir/lite/tools/versioning/op_version.cc.
   kUnsupportedOperatorVersion = 2,
   // The given input operand type is not supported for the current combination
   // of operator type and sdk version.
@@ -402,6 +412,26 @@ class NNAPIDelegateKernel {
                           const TfLiteIntArray* input_tensors,
                           const TfLiteIntArray* output_tensors,
                           int* nnapi_errno);
+
+  // Log the compilation info provided by the support library at the end of
+  // a compilation (failed or successful).
+  // To avoid output spamming, logging is done only once, on the first call to
+  // this method, subsequent runs will only retrieve the information but not
+  // log it.
+  //
+  // This method is registered as a callback with the SL which calls it.
+  static void LogCompilationInfoOnce(
+      const NnApi* nnapi, const ANeuralNetworksDiagnosticCompilationInfo* info);
+
+  // Log the execution info provided by the support library at the end of
+  // an execution (failed or successful).
+  // To avoid output spamming, logging is done only once, on the first call to
+  // this method, subsequent runs will only retrieve the information but not
+  // log it.
+  //
+  // This method is registered as a callback with the SL which calls it.
+  static void LogExecutionInfoOnce(
+      const NnApi* nnapi, const ANeuralNetworksDiagnosticExecutionInfo* info);
 };
 
 }  // namespace nnapi

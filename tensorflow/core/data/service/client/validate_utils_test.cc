@@ -16,6 +16,8 @@ limitations under the License.
 
 #include <memory>
 
+#include <gmock/gmock.h>
+#include "xla/tsl/protobuf/error_codes.pb.h"
 #include "tensorflow/core/data/service/client/common.h"
 #include "tensorflow/core/data/service/common.pb.h"
 #include "tensorflow/core/data/service/worker_impl.h"
@@ -71,7 +73,7 @@ TEST(ValidateUtilsTest, NoLocalWorker) {
   params.target_workers = TARGET_WORKERS_LOCAL;
   EXPECT_THAT(
       ValidateDataServiceParams(params),
-      StatusIs(
+      absl_testing::StatusIs(
           error::INVALID_ARGUMENT,
           HasSubstr(
               "Local reads require local tf.data workers, but no local worker "
@@ -84,7 +86,7 @@ TEST(ValidateUtilsTest, NoLocalWorkerStaticSharding) {
   params.target_workers = TARGET_WORKERS_LOCAL;
   EXPECT_THAT(
       ValidateDataServiceParams(params),
-      StatusIs(
+      absl_testing::StatusIs(
           error::INVALID_ARGUMENT,
           HasSubstr(
               "Static sharding policy <FILE_OR_DATA> requires local tf.data "
@@ -97,11 +99,11 @@ TEST(ValidateUtilsTest, LocalReadDisallowsCoordinatedRead) {
   params.num_consumers = 1;
   params.consumer_index = 0;
   params.target_workers = TARGET_WORKERS_LOCAL;
-  EXPECT_THAT(
-      ValidateDataServiceParams(params),
-      StatusIs(error::INVALID_ARGUMENT,
-               HasSubstr("Coordinated reads require non-local workers, but "
-                         "`target_workers` is \"LOCAL\".")));
+  EXPECT_THAT(ValidateDataServiceParams(params),
+              absl_testing::StatusIs(
+                  error::INVALID_ARGUMENT,
+                  HasSubstr("Coordinated reads require non-local workers, but "
+                            "`target_workers` is \"LOCAL\".")));
   LocalWorkers::Remove("localhost");
 }
 
@@ -123,7 +125,7 @@ TEST(ValidateUtilsTest, CrossTrainerCacheRequiresJobName) {
   params.cross_trainer_cache_options->set_trainer_id("trainer ID");
   EXPECT_THAT(
       ValidateDataServiceParams(params),
-      StatusIs(
+      absl_testing::StatusIs(
           error::INVALID_ARGUMENT,
           "Cross-trainer caching requires named jobs. Got empty `job_name`."));
 }
@@ -136,9 +138,10 @@ TEST(ValidateUtilsTest, CrossTrainerCacheRequiresInfiniteDataset) {
   params.cross_trainer_cache_options.emplace();
   params.cross_trainer_cache_options->set_trainer_id("trainer ID");
   EXPECT_THAT(ValidateDataServiceParams(params),
-              StatusIs(error::INVALID_ARGUMENT,
-                       HasSubstr("Cross-trainer caching requires the input "
-                                 "dataset to be infinite.")));
+              absl_testing::StatusIs(
+                  error::INVALID_ARGUMENT,
+                  HasSubstr("Cross-trainer caching requires the input "
+                            "dataset to be infinite.")));
 }
 
 TEST(ValidateUtilsTest, CrossTrainerCacheDisallowsRepetition) {
@@ -150,7 +153,7 @@ TEST(ValidateUtilsTest, CrossTrainerCacheDisallowsRepetition) {
   params.cross_trainer_cache_options->set_trainer_id("trainer ID");
   EXPECT_THAT(
       ValidateDataServiceParams(params),
-      StatusIs(
+      absl_testing::StatusIs(
           error::INVALID_ARGUMENT,
           HasSubstr(
               "Cross-trainer caching requires infinite datasets and disallows "
@@ -168,7 +171,7 @@ TEST(ValidateUtilsTest, CrossTrainerCacheDisallowsCoordinatedRead) {
   params.cross_trainer_cache_options->set_trainer_id("trainer ID");
   EXPECT_THAT(
       ValidateDataServiceParams(params),
-      StatusIs(
+      absl_testing::StatusIs(
           error::INVALID_ARGUMENT,
           HasSubstr(
               "Cross-trainer caching does not support coordinated reads.")));

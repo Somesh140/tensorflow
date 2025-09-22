@@ -25,7 +25,6 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/function.h"
 #include "tensorflow/core/graph/graph.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "tensorflow/stream_executor/lib/statusor.h"
 
 namespace tensorflow {
 class ResourceUsageAnalysis {
@@ -87,7 +86,7 @@ class ResourceUsageAnalysis {
   // source_to_path maps the nodes that creates resources to all nodes that
   // operate on the corresponding resource, not including sources themselves. It
   // is cleared upon calling this method.
-  static Status Analyze(
+  static absl::Status Analyze(
       const Graph* graph, FunctionLibraryRuntime* lib_runtime,
       absl::flat_hash_map<NodeInfo, absl::flat_hash_set<NodeInfo>>*
           source_to_path);

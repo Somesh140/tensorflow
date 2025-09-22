@@ -41,19 +41,17 @@ def TfExecutor_Dialect : Dialect {
     last returned value (exceptions are `tf_executor.NextIteration.graph`,
     `tf_executor.NextIteration.sink` and `tf_executor.fetch` which don’t return any
     value).
-
-  let emitAccessorPrefix = kEmitAccessorPrefix_Raw;
 }];
 
   let cppNamespace = "::mlir::tf_executor";
 }
 
 // Control type.
-def TfeControlType : Type<CPred<"$_self.isa<ControlType>()">, "control">,
+def TfeControlType : Type<CPred<"llvm::isa<ControlType>($_self)">, "control">,
                      BuildableType<"$_builder.getType<ControlType>()">;
 
 // Token type.
-def TfeTokenType : Type<CPred<"$_self.isa<TokenType>()">, "token">,
+def TfeTokenType : Type<CPred<"llvm::isa<TokenType>($_self)">, "token">,
                    BuildableType<"$_builder.getType<TokenType>()">;
 
 // TODO(hinsu): Define and use TensorType instead of AnyType for data operands
@@ -398,8 +396,8 @@ def TfExecutor_EnterOp : TfExecutor_Op<"Enter",
   let arguments = (ins
     AnyType:$data,
     StrAttr:$frame_name,
-    DefaultValuedAttr<BoolAttr, "false">:$is_constant,
-    DefaultValuedAttr<I64Attr, "10">:$parallel_iterations,
+    DefaultValuedOptionalAttr<BoolAttr, "false">:$is_constant,
+    DefaultValuedOptionalAttr<I64Attr, "10">:$parallel_iterations,
     // Optional extra control inputs.
     Variadic<TfeControlType>:$controlInputs
   );
@@ -471,7 +469,7 @@ def TfExecutor_NextIterationSourceOp : TfExecutor_Op<"NextIteration.Source",
 
   let extraClassDeclaration = [{
     NextIterationSinkOp GetSink() {
-      return cast<NextIterationSinkOp>(*token().user_begin());
+      return cast<NextIterationSinkOp>(*getToken().user_begin());
     }
   }];
 

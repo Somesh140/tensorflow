@@ -15,9 +15,17 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
-#include "llvm/ADT/StringRef.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/Dialect/Quant/IR/Quant.h"  // from @llvm-project
+#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
+#include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Support/TypeID.h"  // from @llvm-project
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project  // IWYU pragma: keep, for applyPatternsGreedily
+#include "tensorflow/compiler/mlir/quantization/common/ir/QuantOps.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/passes/passes.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/utils/fake_quant_utils.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
@@ -45,7 +53,8 @@ class ConvertFakeQuantToQdqPass
 
   void getDependentDialects(DialectRegistry& registry) const override {
     registry.insert<TF::TensorFlowDialect>();
-    registry.insert<QuantizationDialect>();
+    registry.insert<quant::QuantDialect>();
+    registry.insert<mlir::quant::ir::TFQuantDialect>();
   }
 
   void runOnOperation() override;
@@ -65,7 +74,9 @@ void ConvertFakeQuantToQdqPass::runOnOperation() {
 
   // For removing dead FakeQuant* ops
   RewritePatternSet patterns(ctx);
-  (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
+  if (failed(applyPatternsGreedily(func, std::move(patterns)))) {
+    signalPassFailure();
+  }
 }
 
 }  // namespace

@@ -16,10 +16,14 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_FRAMEWORK_TENSOR_H_
 #define TENSORFLOW_CORE_FRAMEWORK_TENSOR_H_
 
+#include <cstddef>
 #include <cstdint>
+#include <iosfwd>
+#include <string>
 #include <type_traits>
+#include <utility>
 
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+#include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
 #include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/tensor_types.h"
@@ -29,8 +33,6 @@ limitations under the License.
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/core/stringpiece.h"
 #include "tensorflow/core/lib/gtl/inlined_vector.h"
-#include "tensorflow/core/platform/logging.h"
-#include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/mem.h"
 #include "tensorflow/core/platform/types.h"
 
@@ -39,23 +41,29 @@ namespace tensorflow {
 // Forward declarations.  In particular, we forward declare protos so that their
 // symbols can be removed from .so exports.
 class AllocationDescription;
-class Allocator;
 class OpKernelContext;
 class Tensor;
 class TensorBuffer;
 class TensorCApi;
+class TensorInterface;
 class TensorCord;
 class TensorDescription;
 class TensorProto;
 class Var;
 
 namespace batch_util {
-Status CopyElementToSlice(Tensor element, Tensor* parent, int64_t index);
-Status CopySliceToElement(const Tensor& parent, Tensor* element, int64_t index);
-Status MaybeMoveSliceToElement(Tensor* parent, Tensor* element, int64_t index);
-Status CopyContiguousSlices(const Tensor& src, int64_t src_offset,
-                            int64_t dst_offset, int64_t num_slices,
-                            Tensor* dst);
+absl::Status CopyElementToSlice(const Tensor& element, Tensor* parent,
+                                int64_t index);
+absl::Status CopySliceToElement(const Tensor& parent, Tensor* element,
+                                int64_t index);
+absl::Status MaybeMoveSliceToElement(Tensor* parent, Tensor* element,
+                                     int64_t index);
+absl::Status CopyContiguousSlices(const Tensor& src, int64_t src_offset,
+                                  int64_t dst_offset, int64_t num_slices,
+                                  Tensor* dst);
+absl::Status MaybeMoveContiguousSlices(Tensor& src, int64_t src_offset,
+                                       int64_t dst_offset, int64_t num_slices,
+                                       Tensor* dst);
 }  // namespace batch_util
 
 /// @ingroup core
@@ -165,7 +173,7 @@ class Tensor {
 
   /// \brief Creates a tensor with the input datatype, shape and buf.
   ///
-  /// Takes an ownership of the bufffer from the reference counted pointer.
+  /// Takes an ownership of the buffer from the reference counted pointer.
   Tensor(DataType type, TensorShape shape, core::RefCountPtr<TensorBuffer> buf);
 
   /// \brief Creates an empty Tensor of the given data type.
@@ -181,8 +189,8 @@ class Tensor {
   /// validate that the `DataType` is valid and supported.
   ///
   /// The underlying buffer is allocated using a `CPUAllocator`.
-  static Status BuildTensor(DataType type, const TensorShape& shape,
-                            Tensor* out_tensor);
+  static absl::Status BuildTensor(DataType type, const TensorShape& shape,
+                                  Tensor* out_tensor);
 
  private:
   // A tag type for selecting the `Tensor` constructor overload that creates a
@@ -270,6 +278,10 @@ class Tensor {
 
   ~Tensor();
 
+  // I/O operators.
+  friend std::ostream&  // NOLINT: iosfwd
+  operator<<(std::ostream& out, const Tensor& tensor);
+
   /// Returns the data type.
   DataType dtype() const { return shape_.data_type(); }
 
@@ -303,6 +315,9 @@ class Tensor {
 
   /// Returns the estimated memory usage of this tensor.
   size_t TotalBytes() const;
+
+  // Returns the size of the underlying TensorBuffer
+  size_t GetBufferSize() const;
 
   // Returns the size of allocated memory for this tensor.
   size_t AllocatedBytes() const;
@@ -421,7 +436,7 @@ class Tensor {
   }
 
   template <typename T, size_t NDIMS>
-  typename TTypes<T, NDIMS>::Tensor tensor();
+  typename TTypes<T, NDIMS>::Tensor tensor() TF_ATTRIBUTE_NOINLINE;
 
   /// \brief Return the tensor data to an `Eigen::Tensor` with the
   /// same size but a bitwise cast to the specified dtype `T`.
@@ -471,9 +486,7 @@ class Tensor {
   ///
   /// ```
   template <typename T>
-  typename TTypes<T>::Flat flat() {
-    return shaped<T, 1>({NumElements()});
-  }
+  typename TTypes<T>::Flat flat();
 
   template <typename T>
   typename TTypes<T>::UnalignedFlat unaligned_flat() {
@@ -504,7 +517,7 @@ class Tensor {
   typename TTypes<T, NDIMS>::Tensor flat_inner_outer_dims(int64_t begin);
 
   template <typename T, size_t NDIMS>
-  typename TTypes<T, NDIMS>::Tensor shaped(gtl::ArraySlice<int64_t> new_sizes);
+  typename TTypes<T, NDIMS>::Tensor shaped(absl::Span<const int64_t> new_sizes);
 
   /// \brief Return the tensor data to an `Eigen::Tensor` with the new
   /// shape specified in `new_sizes` and cast to a new dtype `T`.
@@ -513,11 +526,11 @@ class Tensor {
   /// The allowed bitcast is the only difference from `shaped()`.
   template <typename T, size_t NDIMS>
   typename TTypes<T, NDIMS>::Tensor bit_casted_shaped(
-      gtl::ArraySlice<int64_t> new_sizes);
+      absl::Span<const int64_t> new_sizes);
 
   template <typename T, size_t NDIMS>
   typename TTypes<T, NDIMS>::UnalignedTensor unaligned_shaped(
-      gtl::ArraySlice<int64_t> new_sizes);
+      absl::Span<const int64_t> new_sizes);
 
   /// \brief Return the Tensor data as a `TensorMap` of fixed size 1:
   /// `TensorMap<TensorFixedSize<T, 1>>`.
@@ -539,7 +552,7 @@ class Tensor {
   }
 
   template <typename T, size_t NDIMS>
-  typename TTypes<T, NDIMS>::ConstTensor tensor() const;
+  typename TTypes<T, NDIMS>::ConstTensor tensor() const TF_ATTRIBUTE_NOINLINE;
 
   /// \brief Return the tensor data to an `Eigen::Tensor` with the
   /// same size but a bitwise cast to the specified dtype `T`.
@@ -560,9 +573,7 @@ class Tensor {
   typename TTypes<T, NDIMS>::ConstTensor reinterpret_last_dimension() const;
 
   template <typename T>
-  typename TTypes<T>::ConstFlat flat() const {
-    return shaped<T, 1>({NumElements()});
-  }
+  typename TTypes<T>::ConstFlat flat() const;
 
   template <typename T>
   typename TTypes<T>::UnalignedConstFlat unaligned_flat() const {
@@ -571,7 +582,7 @@ class Tensor {
 
   template <typename T, size_t NDIMS>
   typename TTypes<T, NDIMS>::ConstTensor shaped(
-      gtl::ArraySlice<int64_t> new_sizes) const;
+      absl::Span<const int64_t> new_sizes) const;
 
   /// \brief Return the tensor data to an `Eigen::Tensor` with the new
   /// shape specified in `new_sizes` and cast to a new dtype `T`.
@@ -580,11 +591,11 @@ class Tensor {
   /// The allowed bitcast is the only difference from `shaped()`.
   template <typename T, size_t NDIMS>
   typename TTypes<T, NDIMS>::ConstTensor bit_casted_shaped(
-      gtl::ArraySlice<int64_t> new_sizes) const;
+      absl::Span<const int64_t> new_sizes) const;
 
   template <typename T, size_t NDIMS>
   typename TTypes<T, NDIMS>::UnalignedConstTensor unaligned_shaped(
-      gtl::ArraySlice<int64_t> new_sizes) const;
+      absl::Span<const int64_t> new_sizes) const;
 
   template <typename T>
   typename TTypes<T>::ConstScalar scalar() const;
@@ -629,7 +640,7 @@ class Tensor {
   /// not get destroyed while the `StringPiece` is still used.
   ///
   /// REQUIRES: `DataTypeCanUseMemcpy(dtype())`.
-  StringPiece tensor_data() const;
+  absl::string_view tensor_data() const;
   void* data() const;
 
   /// Copy the other tensor into this tensor, reshape it and reinterpret the
@@ -653,8 +664,8 @@ class Tensor {
   ///
   /// If any of the requirements are not met, errors::InvalidArgument is
   /// returned.
-  Status BitcastFrom(const Tensor& other, DataType dtype,
-                     const TensorShape& shape);
+  absl::Status BitcastFrom(const Tensor& other, DataType dtype,
+                           const TensorShape& shape);
 
   /// Like BitcastFrom, but CHECK fails if any preconditions are not met.
   ///
@@ -666,22 +677,42 @@ class Tensor {
 
   // Returns true if the refcount on buf_ and any possible underlying root
   // buffer is one.
-  bool RefCountIsOne() const;
+  bool RefCountIsOne() const {
+    // Notice that buf_ either points to a regular TensorBuffer or a SubBuffer.
+    // For the latter case, we have to make sure that the refcount is
+    // one both for the SubBuffer _and_ the underlying TensorBuffer.
+    return buf_ != nullptr && buf_->RefCountIsOne() &&
+           buf_->root_buffer()->RefCountIsOne() && buf_->OwnsMemory();
+  }
+
+  // Experimental. Returns the refcount on buf_ if it points to a regular
+  // TensorBuffer. If buf_ points to a SubBuffer, returns -1.
+  int RefCount() const {
+    if (buf_->root_buffer() != buf_) {
+      LOG(ERROR)
+          << "Tensor RefCount not reliable if buf_ points to a SubBuffer.";
+      return -1;
+    }
+    return buf_->RefCount();
+  }
 
   // Returns the type of the underlying memory.
   AllocatorMemoryType GetMemoryType() const { return buf_->GetMemoryType(); }
 
  private:
+  // Returns a StringPiece mapping the current tensor's buffer.
+  absl::string_view tensor_data_internal() const;
+
   void CheckType(DataType expected_dtype) const;
   void CheckTypeAndIsAligned(DataType expected_dtype) const;
   void CheckIsAlignedAndSingleElement() const;
   void set_dtype(DataType t) { shape_.set_data_type(t); }
 
   // TensorShape's InlineVector.
-  static gtl::InlinedVector<int64_t, 4> ComputeFlatInnerDims(
-      gtl::ArraySlice<int64_t> orig, int64_t num_out_dims);
-  static gtl::InlinedVector<int64_t, 4> ComputeFlatOuterDims(
-      gtl::ArraySlice<int64_t> orig, int64_t num_out_dims);
+  static absl::InlinedVector<int64_t, 4UL> ComputeFlatInnerDims(
+      absl::Span<const int64_t> orig, int64_t num_out_dims);
+  static absl::InlinedVector<int64_t, 4UL> ComputeFlatOuterDims(
+      absl::Span<const int64_t> orig, int64_t num_out_dims);
 
   TensorShape shape_;
   TensorBuffer* buf_;
@@ -693,20 +724,25 @@ class Tensor {
   friend class VariableOp;            // For access to set_shape.
   friend class AutoReloadVariableOp;  // For access to set_shape.
   friend class TensorTestHelper;      // For access to set_shape.
+  friend class TensorInterface;       // For access to set_shape.
   friend class CastOpBase;            // For access to set_dtype.
   friend class ScopedAllocator;       // For access to buf_.
-  friend Status batch_util::CopyElementToSlice(
-      Tensor element, Tensor* parent,
+  friend class PjRtTensorBufferUtil;  // For access to buf_.
+  friend absl::Status batch_util::CopyElementToSlice(
+      const Tensor& element, Tensor* parent,
       int64_t index);  // For access to base<T>().
-  friend Status batch_util::CopySliceToElement(
+  friend absl::Status batch_util::CopySliceToElement(
       const Tensor& parent, Tensor* element,
       int64_t index);  // For access to base<T>().
-  friend Status batch_util::MaybeMoveSliceToElement(
+  friend absl::Status batch_util::MaybeMoveSliceToElement(
       Tensor* parent, Tensor* element,
       int64_t index);  // For access to base<T>().
-  friend Status batch_util::CopyContiguousSlices(
+  friend absl::Status batch_util::CopyContiguousSlices(
       const Tensor& src, int64_t src_offset, int64_t dst_offset,
       int64_t num_slices,
+      Tensor* dst);  // For access to base<T>().
+  friend absl::Status batch_util::MaybeMoveContiguousSlices(
+      Tensor& src, int64_t src_offset, int64_t dst_offset, int64_t num_slices,
       Tensor* dst);  // For access to base<T>().
 
   bool CanUseDMA() const;
@@ -740,12 +776,12 @@ class Tensor {
 
   template <size_t NDIMS>
   void FillDimsAndValidateCompatibleShape(
-      gtl::ArraySlice<int64_t> new_sizes,
+      absl::Span<const int64_t> new_sizes,
       Eigen::array<Eigen::DenseIndex, NDIMS>* dims) const;
 
   template <typename T, size_t NDIMS>
   void FillDimsAndValidateCompatibleShape(
-      gtl::ArraySlice<int64_t> new_sizes,
+      absl::Span<const int64_t> new_sizes,
       Eigen::array<Eigen::DenseIndex, NDIMS>* dims) const;
 };
 
@@ -758,6 +794,7 @@ T* Tensor::base() const {
   return buf_ == nullptr ? nullptr : buf_->base<T>();
 }
 
+// This routine is defined out of line for code-space savings
 template <typename T, size_t NDIMS>
 typename TTypes<T, NDIMS>::Tensor Tensor::tensor() {
   CheckTypeAndIsAligned(DataTypeToEnum<T>::v());
@@ -765,6 +802,7 @@ typename TTypes<T, NDIMS>::Tensor Tensor::tensor() {
                                            shape().AsEigenDSizes<NDIMS>());
 }
 
+// This routine is defined out of line for code-space savings
 template <typename T, size_t NDIMS>
 typename TTypes<T, NDIMS>::ConstTensor Tensor::tensor() const {
   CheckTypeAndIsAligned(DataTypeToEnum<T>::v());
@@ -821,7 +859,7 @@ typename TTypes<T, NDIMS>::ConstTensor Tensor::reinterpret_last_dimension()
 
 template <size_t NDIMS>
 void Tensor::FillDimsAndValidateCompatibleShape(
-    gtl::ArraySlice<int64_t> new_sizes,
+    absl::Span<const int64_t> new_sizes,
     Eigen::array<Eigen::DenseIndex, NDIMS>* dims) const {
   CHECK_EQ(NDIMS, new_sizes.size());
   int64_t new_num_elements = 1;
@@ -834,7 +872,7 @@ void Tensor::FillDimsAndValidateCompatibleShape(
 
 template <typename T, size_t NDIMS>
 void Tensor::FillDimsAndValidateCompatibleShape(
-    gtl::ArraySlice<int64_t> new_sizes,
+    absl::Span<const int64_t> new_sizes,
     Eigen::array<Eigen::DenseIndex, NDIMS>* dims) const {
   CHECK_EQ(NDIMS, new_sizes.size());
   int64_t new_num_elements = 1;
@@ -857,9 +895,27 @@ void Tensor::FillDimsAndValidateCompatibleShape(
   }
 }
 
+template <typename T>
+typename TTypes<T>::Flat Tensor::flat() {
+  // Equivalent to 'return shaped<T, 1>({NumElements()});'
+  CheckTypeAndIsAligned(DataTypeToEnum<T>::v());
+  Eigen::array<Eigen::DenseIndex, 1> dims;
+  dims[0] = NumElements();
+  return typename TTypes<T, 1>::Tensor(base<T>(), dims);
+}
+
+template <typename T>
+typename TTypes<T>::ConstFlat Tensor::flat() const {
+  // Equuivalent to 'return shaped<T, 1>({NumElements()});'
+  CheckTypeAndIsAligned(DataTypeToEnum<T>::v());
+  Eigen::array<Eigen::DenseIndex, 1> dims;
+  dims[0] = NumElements();
+  return typename TTypes<T, 1>::ConstTensor(base<T>(), dims);
+}
+
 template <typename T, size_t NDIMS>
 typename TTypes<T, NDIMS>::Tensor Tensor::shaped(
-    gtl::ArraySlice<int64_t> new_sizes) {
+    absl::Span<const int64_t> new_sizes) {
   CheckTypeAndIsAligned(DataTypeToEnum<T>::v());
   Eigen::array<Eigen::DenseIndex, NDIMS> dims;
   FillDimsAndValidateCompatibleShape(new_sizes, &dims);
@@ -868,7 +924,7 @@ typename TTypes<T, NDIMS>::Tensor Tensor::shaped(
 
 template <typename T, size_t NDIMS>
 typename TTypes<T, NDIMS>::Tensor Tensor::bit_casted_shaped(
-    gtl::ArraySlice<int64_t> new_sizes) {
+    absl::Span<const int64_t> new_sizes) {
   CHECK(IsAligned());
   Eigen::array<Eigen::DenseIndex, NDIMS> dims;
   FillDimsAndValidateCompatibleShape<T>(new_sizes, &dims);
@@ -877,7 +933,7 @@ typename TTypes<T, NDIMS>::Tensor Tensor::bit_casted_shaped(
 
 template <typename T, size_t NDIMS>
 typename TTypes<T, NDIMS>::UnalignedTensor Tensor::unaligned_shaped(
-    gtl::ArraySlice<int64_t> new_sizes) {
+    absl::Span<const int64_t> new_sizes) {
   CheckType(DataTypeToEnum<T>::v());
   Eigen::array<Eigen::DenseIndex, NDIMS> dims;
   FillDimsAndValidateCompatibleShape(new_sizes, &dims);
@@ -886,7 +942,7 @@ typename TTypes<T, NDIMS>::UnalignedTensor Tensor::unaligned_shaped(
 
 template <typename T, size_t NDIMS>
 typename TTypes<T, NDIMS>::ConstTensor Tensor::shaped(
-    gtl::ArraySlice<int64_t> new_sizes) const {
+    absl::Span<const int64_t> new_sizes) const {
   CheckType(DataTypeToEnum<T>::v());
   CHECK(IsAligned()) << "ptr = " << base<void>();
   Eigen::array<Eigen::DenseIndex, NDIMS> dims;
@@ -896,7 +952,7 @@ typename TTypes<T, NDIMS>::ConstTensor Tensor::shaped(
 
 template <typename T, size_t NDIMS>
 typename TTypes<T, NDIMS>::ConstTensor Tensor::bit_casted_shaped(
-    gtl::ArraySlice<int64_t> new_sizes) const {
+    absl::Span<const int64_t> new_sizes) const {
   CHECK(IsAligned());
   Eigen::array<Eigen::DenseIndex, NDIMS> dims;
   FillDimsAndValidateCompatibleShape<T>(new_sizes, &dims);
@@ -905,7 +961,7 @@ typename TTypes<T, NDIMS>::ConstTensor Tensor::bit_casted_shaped(
 
 template <typename T, size_t NDIMS>
 typename TTypes<T, NDIMS>::UnalignedConstTensor Tensor::unaligned_shaped(
-    gtl::ArraySlice<int64_t> new_sizes) const {
+    absl::Span<const int64_t> new_sizes) const {
   CheckType(DataTypeToEnum<T>::v());
   Eigen::array<Eigen::DenseIndex, NDIMS> dims;
   FillDimsAndValidateCompatibleShape(new_sizes, &dims);
@@ -942,7 +998,7 @@ typename TTypes<T, NDIMS>::Tensor Tensor::flat_outer_dims() {
 
 template <typename T, size_t NDIMS>
 typename TTypes<T, NDIMS>::Tensor Tensor::flat_inner_outer_dims(int64_t begin) {
-  gtl::InlinedVector<int64_t, 4> flat_outer =
+  absl::InlinedVector<int64_t, 4UL> flat_outer =
       ComputeFlatOuterDims(shape_.dim_sizes(), begin + NDIMS);
   return shaped<T, NDIMS>(ComputeFlatInnerDims(flat_outer, NDIMS));
 }
@@ -960,7 +1016,7 @@ typename TTypes<T, NDIMS>::ConstTensor Tensor::flat_outer_dims() const {
 template <typename T, size_t NDIMS>
 typename TTypes<T, NDIMS>::ConstTensor Tensor::flat_inner_outer_dims(
     int64_t begin) const {
-  gtl::InlinedVector<int64_t, 4> flat_outer =
+  absl::InlinedVector<int64_t, 4UL> flat_outer =
       ComputeFlatOuterDims(shape_.dim_sizes(), begin + NDIMS);
   return shaped<T, NDIMS>(ComputeFlatInnerDims(flat_outer, NDIMS));
 }
@@ -1027,9 +1083,8 @@ void Tensor::ValueAndTensorBuffer<T>::HostScalarTensorBuffer::operator delete(
   // NOTE(mrry): Using `sizeof(Tensor::ValueAndTensorBuffer<T>)` here requires
   // us to define this method outside the class definition, so that it is not
   // considered an incomplete type.
-  typename std::aligned_storage<sizeof(Tensor::ValueAndTensorBuffer<T>),
-                                alignof(Tensor::ValueAndTensorBuffer<T>)>::type
-      dummy_storage_;
+  alignas(Tensor::ValueAndTensorBuffer<T>)
+      std::byte dummy_storage_[sizeof(Tensor::ValueAndTensorBuffer<T>)];
   Tensor::ValueAndTensorBuffer<T>* dummy_object =
       reinterpret_cast<Tensor::ValueAndTensorBuffer<T>*>(&dummy_storage_);
   intptr_t offset = reinterpret_cast<intptr_t>(&dummy_object->tensor_buffer) -

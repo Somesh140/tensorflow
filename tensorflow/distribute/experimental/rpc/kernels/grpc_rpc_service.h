@@ -18,6 +18,5 @@ limitations under the License.
 
 #include "tensorflow/distribute/experimental/rpc/proto/tf_rpc_service.grpc.pb.h"
 #include "tensorflow/distribute/experimental/rpc/proto/tf_rpc_service.pb.h"
-#include "tensorflow/stream_executor/platform/port.h"
 
 #endif  // TENSORFLOW_DISTRIBUTE_EXPERIMENTAL_RPC_KERNELS_GRPC_RPC_SERVICE_H_

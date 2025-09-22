@@ -14,13 +14,15 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <iterator>
+#include <memory>
 
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/LogicalResult.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
@@ -28,9 +30,11 @@ limitations under the License.
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/OperationSupport.h"  // from @llvm-project
 #include "mlir/IR/SymbolTable.h"  // from @llvm-project
+#include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
-#include "mlir/Transforms/Passes.h"  // from @llvm-project
+#include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tfrt/transforms/passes.h"
 
@@ -131,10 +135,10 @@ mlir::LogicalResult DeduplicateFunctionsInovkedByBatchFunction::Run() {
           // User is not a BatchFunctionOp
           if (!op) return false;
           if (shared_name.empty()) {
-            shared_name = op.shared_name();
+            shared_name = op.getSharedName();
             return true;
           }
-          return shared_name == op.shared_name();
+          return shared_name == op.getSharedName();
         })) {
       shared_name_to_func_ops[shared_name].push_back(func);
     }

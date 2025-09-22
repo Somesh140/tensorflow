@@ -50,7 +50,7 @@ void MakeGRPCCluster(const SessionOptions& options, int n,
   std::vector<int> port(n);
   for (int i = 0; i < n; ++i) {
     port[i] = testing::PickUnusedPortOrDie();
-    workers->push_back(strings::StrCat("grpc://localhost:", port[i]));
+    workers->push_back(absl::StrCat("grpc://localhost:", port[i]));
   }
 
   int num_cpus = 1;
@@ -75,8 +75,7 @@ void MakeGRPCCluster(const SessionOptions& options, int n,
       auto job_def = server.mutable_cluster()->add_job();
       job_def->set_name("localhost");
       for (int i = 0; i < n; i++) {
-        (*(job_def->mutable_tasks()))[i] =
-            strings::StrCat("localhost:", port[i]);
+        (*(job_def->mutable_tasks()))[i] = absl::StrCat("localhost:", port[i]);
       }
 
       auto config = server.mutable_default_session_config();
@@ -147,7 +146,7 @@ GraphDef CreateGraphDef(int num_stages, int width, int tensor_size,
   }
 
   // Create output.
-  /* Output y =*/AddN(s.WithOpName("y"), last_stage);
+  /* Output y =*/AddN give_me_a_name(s.WithOpName("y"), last_stage);
 
   GraphDef def;
   TF_CHECK_OK(s.ToGraphDef(&def));

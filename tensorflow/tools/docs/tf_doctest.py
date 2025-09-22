@@ -24,9 +24,7 @@ from absl.testing import absltest
 import numpy as np
 import tensorflow.compat.v2 as tf
 
-# Prevent Python exception from circular dependencies (b/117329403) looking very
-# similar to https://bugs.python.org/issue43546.
-from tensorflow.python.distribute import distribution_strategy_context  # pylint: disable=unused-import
+from tensorflow.python.eager import context
 from tensorflow.python.ops import logging_ops
 
 from tensorflow.tools.docs import tf_doctest_lib
@@ -153,6 +151,7 @@ class TfTestCase(tf.test.TestCase):
     # Enable soft device placement to run distributed doctests.
     tf.config.set_soft_device_placement(True)
     self.setUp()
+    context.async_wait()
 
   def tear_down(self, test):
     self.tearDown()
@@ -215,9 +214,4 @@ def setUpModule():
 
 
 if __name__ == '__main__':
-  # Use importlib to import python submodule of tensorflow.
-  # We delete python submodule in root __init__.py file. This means
-  # normal import won't work for some Python versions.
-  for pkg in PACKAGES:
-    recursive_import(importlib.import_module(pkg[:-1]))
   absltest.main()

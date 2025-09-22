@@ -13,6 +13,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <vector>
+
+#include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/grappler/graph_analyzer/graph_analyzer.h"
@@ -30,7 +34,7 @@ namespace graph_analyzer {
 static void LoadModel(const string& filename,
                       tensorflow::MetaGraphDef* metagraph) {
   LOG(INFO) << "Loading model from " << filename;
-  Status st;
+  absl::Status st;
   st = ReadBinaryProto(Env::Default(), filename, metagraph);
   if (!st.ok()) {
     LOG(WARNING) << "Failed to read a binary metagraph: " << st;
@@ -79,7 +83,7 @@ void GraphAnalyzerTool(const string& file_name, int n) {
   MaybePruneGraph(metagraph, &graph);
   tensorflow::grappler::graph_analyzer::GraphAnalyzer analyzer(graph, n);
   LOG(INFO) << "Running the analysis";
-  tensorflow::Status st = analyzer.Run();
+  absl::Status st = analyzer.Run();
   if (!st.ok()) {
     LOG(FATAL) << "Analysis failed: " << st;
   }

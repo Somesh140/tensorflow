@@ -21,11 +21,12 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_LIB_JPEG_JPEG_MEM_H_
 #define TENSORFLOW_CORE_LIB_JPEG_JPEG_MEM_H_
 
+#include <cstdint>
 #include <functional>
-#include <string>
 
 #include "tensorflow/core/lib/core/stringpiece.h"
 #include "tensorflow/core/platform/jpeg.h"
+#include "tensorflow/core/platform/tstring.h"
 #include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
@@ -136,7 +137,7 @@ struct CompressFlags {
   int y_density = 300;
 
   // If not empty, embed this XMP metadata in the image header
-  StringPiece xmp_metadata;
+  absl::string_view xmp_metadata;
 
   // The distance in bytes from one scanline to the other.  Should be at least
   // equal to width*components*sizeof(JSAMPLE).  If 0 is passed, the stride

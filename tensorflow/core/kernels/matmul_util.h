@@ -15,61 +15,74 @@ limitations under the License.
 #include <optional>
 #include <vector>
 
+#if TENSORFLOW_USE_ROCM
+#include "rocm/rocm_config.h"
+#endif
+
+#if GOOGLE_CUDA || TF_HIPBLASLT
+
 #include "absl/container/flat_hash_map.h"
+#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/gpu/gpu_blas_lt.h"
+#include "xla/tsl/platform/types.h"
 #include "tensorflow/core/framework/types.h"
-#include "tensorflow/stream_executor/cuda/cuda_blas_lt.h"
 
 namespace tensorflow {
-
-// Reads the maximum number of algorithms for GEMM autotuning from the
-// environment variable TF_MATMUL_AUTOTUNE_MAX_ALGORITHMS. If no value is set,
-// return the default value.
-int MatmulMaxAutotuneAlgorithmCount();
 
 // Get a workspace limit from the environment variable, which is in MB.
 // Return the workspace memory limit in bytes. If no value is set, return the
 // default value.
 int64_t GetWorkspaceLimit(int64_t default_value_in_bytes);
 
+struct BlasLtMatmulPlanParams {
+  std::string ToString() const;
+  bool operator==(const BlasLtMatmulPlanParams& other) const;
+
+  se::blas::DataType dtype;
+  size_t m;
+  size_t n;
+  size_t k;
+  se::blas::Transpose trans_a;
+  se::blas::Transpose trans_b;
+  size_t batch_count = 1;
+  bool broadcast_a = false;
+  bool broadcast_b = false;
+  se::gpu::BlasLt::Epilogue epilogue = se::gpu::BlasLt::Epilogue::kDefault;
+};
+
 struct PlanAndAlgorithms {
-  se::cuda::BlasLt::MatmulPlan plan;
-  std::vector<se::cuda::BlasLt::MatmulAlgorithm> algorithms;
+  static StatusOr<const PlanAndAlgorithms*> GetOrCreate(
+      se::Stream* stream, const BlasLtMatmulPlanParams& params,
+      absl::Mutex** pmu, std::optional<int> max_algorithm_count = std::nullopt);
+
+  Status ExecuteOnStream(
+      se::Stream* stream, const se::DeviceMemoryBase& a,
+      const se::DeviceMemoryBase& b, se::DeviceMemoryBase& c,
+      size_t algorithm_idx, se::ScratchAllocator& scratch_allocator,
+      const se::DeviceMemoryBase& bias = se::DeviceMemoryBase{},
+      se::blas::ProfileResult* profile_result = nullptr) const;
+
+  se::gpu::BlasLt::MatmulPlanPtr plan;
+  std::vector<se::gpu::BlasLt::MatmulAlgorithm> algorithms;
 };
 
-// Thread-safe map from matmul parameters to their corresponding plan and
-// algorithms.
-class BlasLtMatmulPlanMap {
- public:
-  const PlanAndAlgorithms* Find(
-      const se::cuda::BlasLt::MatmulPlanParams& params) const {
-    absl::MutexLock lock(&mu_);
-    auto iter = params_plan_map_.find(params);
-    if (iter == params_plan_map_.end()) {
-      return nullptr;
-    }
-    return &iter->second;
-  }
+namespace internal {
 
-  const PlanAndAlgorithms* Insert(
-      const se::cuda::BlasLt::MatmulPlanParams& params,
-      PlanAndAlgorithms value) {
-    absl::MutexLock lock(&mu_);
-    return &params_plan_map_.emplace(params, std::move(value)).first->second;
-  }
+inline auto AsTuple(const BlasLtMatmulPlanParams& p) {
+  return std::make_tuple(p.dtype, p.m, p.n, p.k, p.trans_a, p.trans_b,
+                         p.batch_count, p.broadcast_a, p.broadcast_b,
+                         p.epilogue);
+}
 
- private:
-  mutable absl::Mutex mu_;
-  absl::flat_hash_map<se::cuda::BlasLt::MatmulPlanParams, PlanAndAlgorithms>
-      params_plan_map_ ABSL_GUARDED_BY(mu_);
-};
+}  // namespace internal
 
-StatusOr<se::blas::ComputationType> GetBlasComputationType(
-    const DataType& dtype);
-
-StatusOr<const PlanAndAlgorithms*> GetPlanAndAlgorithms(
-    se::Stream* stream, const se::cuda::BlasLt::MatmulPlanParams& params,
-    std::optional<int> max_algorithm_count = std::nullopt);
+template <typename H>
+H AbslHashValue(H h, const BlasLtMatmulPlanParams& params) {
+  return H::combine(std::move(h), internal::AsTuple(params));
+}
 
 }  // namespace tensorflow
+
+#endif  // GOOGLE_CUDA || TF_HIPBLASLT
 
 #endif  // TENSORFLOW_CORE_KERNELS_MATMUL_UTIL_H_

@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/common_runtime/rendezvous_util.h"
 
+#include "absl/synchronization/notification.h"
 #include "tensorflow/core/lib/core/notification.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/test.h"
@@ -56,11 +57,11 @@ TEST_F(RendezvousUtilTest, SendBeforeRecv) {
       rendez_, nullptr, {}, {MakeStringKey("hello1"), MakeStringKey("hello2")},
       {V("hello1"), V("hello2")}));
 
-  Notification n;
+  absl::Notification n;
   std::vector<Tensor> received_keys;
   RecvOutputsFromRendezvousAsync(
       rendez_, nullptr, {}, {MakeStringKey("hello1"), MakeStringKey("hello2")},
-      &received_keys, [&n](const Status& status) { n.Notify(); });
+      &received_keys, [&n](const absl::Status& status) { n.Notify(); });
   n.WaitForNotification();
 
   EXPECT_EQ(2, received_keys.size());
@@ -70,11 +71,11 @@ TEST_F(RendezvousUtilTest, SendBeforeRecv) {
 
 TEST_F(RendezvousUtilTest, RecvBeforeSend) {
   // Fire off recvs, wait for a notification in the callback.
-  Notification n;
+  absl::Notification n;
   std::vector<Tensor> received_keys;
   RecvOutputsFromRendezvousAsync(
       rendez_, nullptr, {}, {MakeStringKey("hello1"), MakeStringKey("hello2")},
-      &received_keys, [&n](const Status& status) { n.Notify(); });
+      &received_keys, [&n](const absl::Status& status) { n.Notify(); });
 
   TF_ASSERT_OK(SendTensorsToRendezvous(
       rendez_, nullptr, {}, {MakeStringKey("hello1"), MakeStringKey("hello2")},
@@ -101,11 +102,11 @@ TEST(RendezvousUtilCallerThreadTest, RecvBeforeSend) {
   Rendezvous* rendez_ = NewLocalRendezvous();
 
   // Fire off recvs, wait for a notification in the callback.
-  Notification n;
+  absl::Notification n;
   std::vector<Tensor> received_keys;
   RecvOutputsFromRendezvousAsync(
       rendez_, nullptr, {}, {MakeStringKey("hello1"), MakeStringKey("hello2")},
-      &received_keys, [&n, rendez_](const Status& status) {
+      &received_keys, [&n, rendez_](const absl::Status& status) {
         rendez_->Unref();
         n.Notify();
       });

@@ -16,19 +16,21 @@ limitations under the License.
 #include "tensorflow/dtensor/mlir/expansions/bias_add_spmd_expander.h"
 
 #include <algorithm>
-#include <array>
 #include <cassert>
+#include <cstdint>
 #include <string>
+#include <vector>
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Casting.h"
 #include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops_a_m.h"
-#include "tensorflow/core/platform/errors.h"
-#include "tensorflow/core/platform/status.h"
 #include "tensorflow/dtensor/cc/dstatus.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/collectives.h"
-#include "tensorflow/dtensor/mlir/expansions/elementwise_spmd_expander.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
 #include "tensorflow/dtensor/mlir/shape_utils.h"
 
@@ -40,7 +42,7 @@ namespace {
 int get_c_dimension_idx(const Layout& layout, llvm::StringRef data_format) {
   // If format is "N...C", the bias is added to the last dimension.
   int c_dim_idx = layout.sharding_spec_strs().size() - 1;
-  if (data_format.startswith("NC")) {
+  if (data_format.starts_with("NC")) {
     // If format is "NC...", the bias is added to the 'C' dimension.
     c_dim_idx = layout.sharding_spec_strs().size() - 3;
   }
@@ -53,7 +55,7 @@ StatusOr<mlir::Operation*> BiasAddExpander::ExpandOp(mlir::Operation* op) {
   TF_ASSIGN_OR_RETURN(auto output_layout,
                       ExtractRequiredSingleLayoutFromOp(op));
   mlir::TF::BiasAddOp bias_add_op = llvm::cast<mlir::TF::BiasAddOp>(op);
-  const llvm::StringRef data_format = bias_add_op.data_format();
+  const llvm::StringRef data_format = bias_add_op.getDataFormat();
   const int c_dim_idx = get_c_dimension_idx(output_layout, data_format);
 
   // Bias add op has 2 inputs: value and bias.
@@ -69,10 +71,8 @@ StatusOr<mlir::Operation*> BiasAddExpander::ExpandOp(mlir::Operation* op) {
 
   // Check if output is sharded more, change input layout to match output
   // layout.
-  int64_t num_input_shards =
-      input_layout.num_shards_for_dim(input_layout.dim(c_dim_idx));
-  int64_t num_output_shards =
-      output_layout.num_shards_for_dim(output_layout.dim(c_dim_idx));
+  int64_t num_input_shards = input_layout.num_shards_for_dim(c_dim_idx);
+  int64_t num_output_shards = output_layout.num_shards_for_dim(c_dim_idx);
 
   if (num_input_shards < num_output_shards) {
     mlir::Value output;
@@ -121,7 +121,7 @@ StatusOr<llvm::DenseMap<int, Layout>> BiasAddExpander::ComputeLayoutForward(
 
   Layout input_layout = input_layouts.lookup(0);
   mlir::TF::BiasAddOp bias_add_op = llvm::cast<mlir::TF::BiasAddOp>(op);
-  llvm::StringRef data_format = bias_add_op.data_format();
+  llvm::StringRef data_format = bias_add_op.getDataFormat();
   int c_dim_idx = get_c_dimension_idx(input_layout, data_format);
 
   std::vector<std::string> new_output_layout_specs =
@@ -158,7 +158,7 @@ StatusOr<llvm::DenseMap<int, Layout>> BiasAddExpander::ComputeLayoutBackward(
 
   // Bias layout should match 'C' dimension of input layout.
   mlir::TF::BiasAddOp bias_add_op = llvm::cast<mlir::TF::BiasAddOp>(op);
-  llvm::StringRef data_format = bias_add_op.data_format();
+  llvm::StringRef data_format = bias_add_op.getDataFormat();
   const int c_dim_idx = get_c_dimension_idx(output_layout, data_format);
 
   std::vector<std::string> bias_new_specs = {

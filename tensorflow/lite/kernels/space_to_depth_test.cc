@@ -17,6 +17,7 @@ limitations under the License.
 #include <initializer_list>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "flatbuffers/flatbuffers.h"  // from @flatbuffers
 #include "tensorflow/lite/kernels/test_util.h"
@@ -54,7 +55,7 @@ class SpaceToDepthOpModel : public SingleOpModel {
   int output_;
 };
 
-#ifdef GTEST_HAS_DEATH_TEST
+#if GTEST_HAS_DEATH_TEST
 TEST(SpaceToDepthOpModel, BadBlockSize) {
   EXPECT_DEATH(SpaceToDepthOpModel({TensorType_FLOAT32, {1, 2, 2, 1}}, 3),
                "Cannot allocate tensors");
@@ -65,8 +66,9 @@ TEST(SpaceToDepthOpModel, Float32) {
   SpaceToDepthOpModel m({TensorType_FLOAT32, {1, 2, 2, 2}}, 2);
   m.SetInput<float>({1.4, 2.3, 3.2, 4.1, 5.4, 6.3, 7.2, 8.1});
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.GetOutput<float>(),
-              ElementsAreArray({1.4, 2.3, 3.2, 4.1, 5.4, 6.3, 7.2, 8.1}));
+  EXPECT_THAT(
+      m.GetOutput<float>(),
+      Pointwise(FloatingPointEq(), {1.4, 2.3, 3.2, 4.1, 5.4, 6.3, 7.2, 8.1}));
   EXPECT_THAT(m.GetOutputShape(), ElementsAre(1, 1, 1, 8));
 }
 

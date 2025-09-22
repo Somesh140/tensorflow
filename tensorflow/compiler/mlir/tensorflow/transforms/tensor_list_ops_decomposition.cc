@@ -13,6 +13,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cassert>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <tuple>
+
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -26,14 +32,15 @@ limitations under the License.
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/TypeUtilities.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/collection_ops_util.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/passes_detail.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/convert_tensor.h"
+#include "tensorflow/compiler/mlir/tensorflow/utils/dynamic_shape_utils.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/mangling_util.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.pb.h"
@@ -45,8 +52,11 @@ namespace {
 
 namespace cutil = TF::collection_ops_util;
 
+#define GEN_PASS_DEF_TENSORLISTOPSDECOMPOSITIONPASS
+#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_passes.h.inc"
+
 struct TensorListOpsDecompositionPass
-    : public TF::TensorListOpsDecompositionPassBase<
+    : public impl::TensorListOpsDecompositionPassBase<
           TensorListOpsDecompositionPass> {
   void runOnOperation() override;
 };
@@ -72,14 +82,14 @@ struct SizeInfo {
 void ModifyFunctionSignature(
     func::FuncOp func, Type size_type,
     llvm::SmallDenseMap<Value, SizeInfo>* buffer_to_size,
-    llvm::function_ref<llvm::Optional<Type>(int64_t)> arg_to_buffer_type,
+    llvm::function_ref<std::optional<Type>(int64_t)> arg_to_buffer_type,
     llvm::function_ref<bool(int64_t)> arg_buffer_size_is_fixed) {
   auto new_input_types = llvm::to_vector<8>(func.getFunctionType().getInputs());
   int64_t original_arg_count = new_input_types.size();
   Location loc = func.getLoc();
   for (int64_t i = 0; i < original_arg_count; ++i) {
     auto buffer_type = arg_to_buffer_type(i);
-    if (!buffer_type.hasValue()) continue;
+    if (!buffer_type.has_value()) continue;
     func.getArgument(i).setType(*buffer_type);
     new_input_types[i] = *buffer_type;
     auto size_arg = func.front().addArgument(size_type, loc);
@@ -127,8 +137,8 @@ AddTensorListSizesToTerminator(
                                        it->getSecond().fixed);
     new_outputs.push_back(it->getSecond().size);
   }
-  OpBuilder(old_terminator)
-      .create<TerminatorOp>(old_terminator->getLoc(), new_outputs);
+  OpBuilder builder(old_terminator);
+  TerminatorOp::create(builder, old_terminator->getLoc(), new_outputs);
   old_terminator->erase();
   return output_buffer_to_size;
 }
@@ -154,9 +164,9 @@ LogicalResult HandleWhileOp(
   // Rewrite body.
   auto body = while_op.body_function();
   llvm::SmallDenseMap<Value, SizeInfo> body_map;
-  auto find_arg_tensor_list_type = [&](int64_t index) -> llvm::Optional<Type> {
+  auto find_arg_tensor_list_type = [&](int64_t index) -> std::optional<Type> {
     auto it = buffer_to_size->find(while_op.getOperand(index));
-    if (it == buffer_to_size->end()) return llvm::None;
+    if (it == buffer_to_size->end()) return std::nullopt;
     return it->getFirst().getType();
   };
   auto arg_buffer_size_is_fixed = [&](int64_t index) {
@@ -192,9 +202,9 @@ LogicalResult HandleWhileOp(
     if (it == buffer_to_size->end()) continue;
     new_while_operands.push_back(it->getSecond().size);
   }
-  auto new_while = builder.create<TF::WhileOp>(
-      while_op.getLoc(), body.getFunctionType().getInputs(), new_while_operands,
-      while_op->getAttrs());
+  auto new_while = TF::WhileOp::create(
+      builder, while_op.getLoc(), body.getFunctionType().getInputs(),
+      new_while_operands, while_op->getAttrs());
   for (const auto& entry : output_buffer_to_size) {
     (*buffer_to_size)[new_while.getResult(std::get<0>(entry))] = {
         new_while.getResult(std::get<1>(entry)), std::get<2>(entry)};
@@ -215,9 +225,9 @@ LogicalResult HandleCaseOrIfOp(
   SmallVector<llvm::SmallDenseMap<Value, SizeInfo>, 2> branch_maps;
   branch_maps.resize(branches.size());
 
-  auto find_arg_buffer_type = [&](int64_t index) -> llvm::Optional<Type> {
+  auto find_arg_buffer_type = [&](int64_t index) -> std::optional<Type> {
     auto it = buffer_to_size->find(op.getOperand(index + 1));
-    if (it == buffer_to_size->end()) return llvm::None;
+    if (it == buffer_to_size->end()) return std::nullopt;
     return it->getFirst().getType();
   };
   auto arg_buffer_size_is_fixed = [&](int64_t index) {
@@ -252,9 +262,10 @@ LogicalResult HandleCaseOrIfOp(
     new_operands.push_back(it->getSecond().size);
   }
   func::FuncOp first_branch = branches.front();
-  auto new_op = OpBuilder(op).create<CaseOrIfOp>(
-      op.getLoc(), first_branch.getFunctionType().getResults(), new_operands,
-      op->getAttrs());
+  builder.setInsertionPoint(op);
+  auto new_op = CaseOrIfOp::create(builder, op.getLoc(),
+                                   first_branch.getFunctionType().getResults(),
+                                   new_operands, op->getAttrs());
   for (const auto& entry : output_buffer_to_size) {
     (*buffer_to_size)[new_op.getResult(std::get<0>(entry))] = {
         new_op.getResult(std::get<1>(entry)), std::get<2>(entry)};
@@ -286,7 +297,7 @@ LogicalResult HandleWhileRegionOp(
   };
 
   // Rewrite body.
-  Region& body_region = while_op.body();
+  Region& body_region = while_op.getBody();
   modify_region_arguments(body_region);
   if (failed(DecomposeTensorListOpsInternal(
           &body_region.front(), module, buffer_to_size,
@@ -297,7 +308,7 @@ LogicalResult HandleWhileRegionOp(
       body_region.front(), *buffer_to_size);
 
   // Rewrite cond.
-  Region& cond_region = while_op.cond();
+  Region& cond_region = while_op.getCond();
   modify_region_arguments(cond_region);
   if (failed(DecomposeTensorListOpsInternal(
           &cond_region.front(), module, buffer_to_size,
@@ -314,11 +325,12 @@ LogicalResult HandleWhileRegionOp(
     if (it == buffer_to_size->end()) continue;
     new_while_operands.push_back(it->getSecond().size);
   }
-  auto new_while = builder.create<TF::WhileRegionOp>(
-      while_op.getLoc(), body_region.front().getTerminator()->getOperandTypes(),
+  auto new_while = TF::WhileRegionOp::create(
+      builder, while_op.getLoc(),
+      body_region.front().getTerminator()->getOperandTypes(),
       new_while_operands, while_op->getAttrs());
-  new_while.body().takeBody(body_region);
-  new_while.cond().takeBody(cond_region);
+  new_while.getBody().takeBody(body_region);
+  new_while.getCond().takeBody(cond_region);
   for (const auto& entry : output_buffer_to_size) {
     (*buffer_to_size)[new_while.getResult(std::get<0>(entry))] = {
         new_while.getResult(std::get<1>(entry)), std::get<2>(entry)};
@@ -335,8 +347,8 @@ LogicalResult HandleIfRegionOp(
     llvm::StringMap<PartitionedCallDecompositionInfo>*
         decomposed_partitioned_call_callees) {
   // Rewrite the branches.
-  Region& then_branch = if_op.then_branch();
-  Region& else_branch = if_op.else_branch();
+  Region& then_branch = if_op.getThenBranch();
+  Region& else_branch = if_op.getElseBranch();
   if (failed(DecomposeTensorListOpsInternal(
           &then_branch.front(), module, buffer_to_size,
           decomposed_partitioned_call_callees)))
@@ -354,16 +366,18 @@ LogicalResult HandleIfRegionOp(
   if (output_buffer_to_size.empty()) return success();
 
   // Recreate the op.
-  auto new_op = OpBuilder(if_op).create<TF::IfRegionOp>(
-      if_op.getLoc(), then_branch.front().getTerminator()->getOperandTypes(),
+  OpBuilder builder(if_op);
+  auto new_op = TF::IfRegionOp::create(
+      builder, if_op.getLoc(),
+      then_branch.front().getTerminator()->getOperandTypes(),
       if_op.getOperand(), if_op->getAttrs());
   for (const auto& entry : output_buffer_to_size) {
     (*buffer_to_size)[new_op.getResult(std::get<0>(entry))] = {
         new_op.getResult(std::get<1>(entry)), std::get<2>(entry)};
   }
 
-  new_op.then_branch().takeBody(if_op.then_branch());
-  new_op.else_branch().takeBody(if_op.else_branch());
+  new_op.getThenBranch().takeBody(if_op.getThenBranch());
+  new_op.getElseBranch().takeBody(if_op.getElseBranch());
 
   if_op.replaceAllUsesWith(
       new_op.getResults().take_front(if_op.getNumResults()));
@@ -399,8 +413,9 @@ LogicalResult HandleCaseRegionOp(
   if (output_buffer_to_size.empty()) return success();
 
   // Recreate the op.
-  auto new_op = OpBuilder(case_op).create<TF::CaseRegionOp>(
-      case_op.getLoc(),
+  OpBuilder builder(case_op);
+  auto new_op = TF::CaseRegionOp::create(
+      builder, case_op.getLoc(),
       first_branch->front().getTerminator()->getOperandTypes(),
       case_op.getOperand(), case_op->getAttrs(), case_op.getNumRegions());
   for (const auto& entry : output_buffer_to_size) {
@@ -441,9 +456,10 @@ LogicalResult HandlePartitionedCallOp(
       new_operands.push_back(it->getSecond().size);
     }
     OpBuilder builder(call);
-    auto new_call = builder.create<CallOp>(
-        call.getLoc(), info.decomposed_callee.getFunctionType().getResults(),
-        new_operands, call->getAttrs());
+    auto new_call =
+        CallOp::create(builder, call.getLoc(),
+                       info.decomposed_callee.getFunctionType().getResults(),
+                       new_operands, call->getAttrs());
     new_call->setAttr(
         "f", SymbolRefAttr::get(
                  builder.getContext(),
@@ -470,9 +486,9 @@ LogicalResult HandlePartitionedCallOp(
     lowered_callee = callee.clone();
     lowered_callee.setPrivate();
   }
-  auto find_arg_buffer_type = [&](int64_t index) -> llvm::Optional<Type> {
+  auto find_arg_buffer_type = [&](int64_t index) -> std::optional<Type> {
     auto it = buffer_to_size->find(call.getOperand(index));
-    if (it == buffer_to_size->end()) return llvm::None;
+    if (it == buffer_to_size->end()) return std::nullopt;
     return it->getFirst().getType();
   };
   auto arg_buffer_size_is_fixed = [&](int64_t index) {
@@ -502,10 +518,10 @@ LogicalResult HandlePartitionedCallOp(
   } else {
     info.signature_change = true;
     for (auto& entry : callee_map) {
-      auto buffer_arg = entry.getFirst().dyn_cast<BlockArgument>();
+      auto buffer_arg = mlir::dyn_cast<BlockArgument>(entry.getFirst());
       if (!buffer_arg) continue;
       info.buffer_arg_to_size_arg[buffer_arg.getArgNumber()] =
-          entry.getSecond().size.cast<BlockArgument>().getArgNumber();
+          mlir::cast<BlockArgument>(entry.getSecond().size).getArgNumber();
     }
     if (lowered_callee != callee) {
       // Add the clone with a new name.
@@ -528,9 +544,9 @@ LogicalResult GetConstShapeValue(Value shape_value,
   if (!shape_op) return failure();
   auto shape_const_op = llvm::dyn_cast<TF::ConstOp>(shape_op);
   if (!shape_const_op) return failure();
-  for (const auto& v : shape_const_op.value().getValues<APInt>()) {
+  for (const auto& v : shape_const_op.getValue().getValues<APInt>()) {
     int64_t dim_size = v.getSExtValue();
-    if (dim_size == ShapedType::kDynamicSize) return failure();
+    if (dim_size == tensorflow::kTFDynamicSize) return failure();
     shape->push_back(dim_size);
   }
   return success();
@@ -541,7 +557,8 @@ LogicalResult GetConstShapeValue(Value shape_value,
 // return error.
 LogicalResult GetElementShapeFromResultType(
     Type type, llvm::SmallVector<int64_t, 8>* shape) {
-  auto variant_type = getElementTypeOrSelf(type).dyn_cast<TF::VariantType>();
+  auto variant_type =
+      mlir::dyn_cast<TF::VariantType>(getElementTypeOrSelf(type));
   if (!variant_type || variant_type.getSubtypes().size() != 1) return failure();
   TensorType tensor_type = variant_type.getSubtypes().front();
   if (!tensor_type.hasStaticShape()) return failure();
@@ -560,17 +577,17 @@ LogicalResult HandleEmptyTensorListOp(
   // shape inference might have successfully inferred the element shape from
   // write operations on the TensorList.
   if (failed(GetElementShapeFromResultType(list.getType(), &element_shape))) {
-    if (failed(GetConstShapeValue(list.element_shape(), &element_shape))) {
+    if (failed(GetConstShapeValue(list.getElementShape(), &element_shape))) {
       return list.emitOpError("unknown tensor list element shape");
     }
   }
   if (failed(cutil::CreateInitBufferValue(
-          element_shape, list.max_num_elements(), list, list.element_dtype(),
+          element_shape, list.getMaxNumElements(), list, list.getElementDtype(),
           builder, &buffer))) {
     return failure();
   }
   Value size = cutil::GetR1Const({0LL}, builder, list.getLoc());
-  list.handle().replaceAllUsesWith(buffer);
+  list.getHandle().replaceAllUsesWith(buffer);
   (*buffer_to_size)[buffer] = {size, /*fixed=*/false};
   list.erase();
   return success();
@@ -587,19 +604,19 @@ LogicalResult HandleTensorListReserveOp(
   // shape inference might have successfully inferred the element shape from
   // write operations on the TensorList.
   if (failed(GetElementShapeFromResultType(list.getType(), &element_shape))) {
-    if (failed(GetConstShapeValue(list.element_shape(), &element_shape))) {
+    if (failed(GetConstShapeValue(list.getElementShape(), &element_shape))) {
       return list.emitOpError("unknown tensor list element shape");
     }
   }
-  if (failed(cutil::CreateInitBufferValue(element_shape, list.num_elements(),
-                                          list, list.element_dtype(), builder,
+  if (failed(cutil::CreateInitBufferValue(element_shape, list.getNumElements(),
+                                          list, list.getElementDtype(), builder,
                                           &buffer))) {
     return failure();
   }
-  Value size = cutil::ReshapeScalarToSizeType(builder, list.num_elements(),
+  Value size = cutil::ReshapeScalarToSizeType(builder, list.getNumElements(),
                                               list.getLoc());
   (*buffer_to_size)[buffer] = {size, /*fixed=*/true};
-  list.handle().replaceAllUsesWith(buffer);
+  list.getHandle().replaceAllUsesWith(buffer);
   list.erase();
   return success();
 }
@@ -608,16 +625,16 @@ LogicalResult HandleTensorListFromTensorOp(
     TF::TensorListFromTensorOp list,
     llvm::SmallDenseMap<Value, SizeInfo>* buffer_to_size) {
   OpBuilder builder(list);
-  Value buffer = builder.create<TF::IdentityOp>(
-      list.getLoc(), ArrayRef<Type>{list.tensor().getType()},
-      ArrayRef<Value>{list.tensor()});
-  auto type = buffer.getType().cast<TensorType>();
+  Value buffer = TF::IdentityOp::create(
+      builder, list.getLoc(), ArrayRef<Type>{list.getTensor().getType()},
+      ArrayRef<Value>{list.getTensor()});
+  auto type = mlir::cast<TensorType>(buffer.getType());
   if (!type.hasStaticShape()) {
     return list.emitOpError("TensorListFromTensorOp input has unknown shape.");
   }
   Value size = cutil::GetR1Const({type.getShape()[0]}, builder, list.getLoc());
   (*buffer_to_size)[buffer] = {size, /*fixed=*/true};
-  list.output_handle().replaceAllUsesWith(buffer);
+  list.getOutputHandle().replaceAllUsesWith(buffer);
   list.erase();
   return success();
 }
@@ -625,7 +642,7 @@ LogicalResult HandleTensorListFromTensorOp(
 LogicalResult HandleTensorListPushBackOp(
     TF::TensorListPushBackOp push,
     llvm::SmallDenseMap<Value, SizeInfo>* buffer_to_size) {
-  auto buffer = push.input_handle();
+  auto buffer = push.getInputHandle();
   auto it = buffer_to_size->find(buffer);
   if (it == buffer_to_size->end()) {
     return push.emitOpError(
@@ -637,11 +654,11 @@ LogicalResult HandleTensorListPushBackOp(
   auto size = it->getSecond().size;
   OpBuilder builder(push);
   auto new_buffer =
-      cutil::SetElement(size, buffer, push.tensor(), builder, push.getLoc());
-  auto new_size = builder.create<TF::AddV2Op>(
-      push.getLoc(), ArrayRef<Type>{size.getType()},
+      cutil::SetElement(size, buffer, push.getTensor(), builder, push.getLoc());
+  auto new_size = TF::AddV2Op::create(
+      builder, push.getLoc(), ArrayRef<Type>{size.getType()},
       ArrayRef<Value>{size, cutil::GetR1Const({1LL}, builder, push.getLoc())});
-  push.output_handle().replaceAllUsesWith(new_buffer);
+  push.getOutputHandle().replaceAllUsesWith(new_buffer);
   (*buffer_to_size)[new_buffer] = {new_size, /*fixed=*/false};
   push.erase();
   return success();
@@ -650,7 +667,7 @@ LogicalResult HandleTensorListPushBackOp(
 LogicalResult HandleTensorListPopBackOp(
     TF::TensorListPopBackOp pop,
     llvm::SmallDenseMap<Value, SizeInfo>* buffer_to_size) {
-  auto buffer = pop.input_handle();
+  auto buffer = pop.getInputHandle();
   auto it = buffer_to_size->find(buffer);
   if (it == buffer_to_size->end()) {
     pop.emitOpError("found tf.TensorListPopBack on unknown TensorList.");
@@ -661,14 +678,15 @@ LogicalResult HandleTensorListPopBackOp(
   }
   auto size = it->getSecond().size;
   OpBuilder builder(pop);
-  auto new_buffer = builder.create<TF::IdentityOp>(
-      pop.getLoc(), ArrayRef<Type>{buffer.getType()}, ArrayRef<Value>{buffer});
-  auto new_size = builder.create<TF::SubOp>(
-      pop.getLoc(), ArrayRef<Type>{size.getType()},
+  auto new_buffer = TF::IdentityOp::create(builder, pop.getLoc(),
+                                           ArrayRef<Type>{buffer.getType()},
+                                           ArrayRef<Value>{buffer});
+  auto new_size = TF::SubOp::create(
+      builder, pop.getLoc(), ArrayRef<Type>{size.getType()},
       ArrayRef<Value>{size, cutil::GetR1Const({1LL}, builder, pop.getLoc())});
   auto element = cutil::GetElement(new_size, new_buffer, builder, pop.getLoc());
-  pop.output_handle().replaceAllUsesWith(new_buffer);
-  pop.tensor().replaceAllUsesWith(element);
+  pop.getOutputHandle().replaceAllUsesWith(new_buffer);
+  pop.getTensor().replaceAllUsesWith(element);
   pop.erase();
   (*buffer_to_size)[new_buffer] = {new_size, /*fixed=*/false};
   return success();
@@ -677,18 +695,18 @@ LogicalResult HandleTensorListPopBackOp(
 LogicalResult HandleTensorListGetItemOp(
     TF::TensorListGetItemOp get_item,
     const llvm::SmallDenseMap<Value, SizeInfo>& buffer_to_size) {
-  auto buffer = get_item.input_handle();
+  auto buffer = get_item.getInputHandle();
   auto it = buffer_to_size.find(buffer);
   if (it == buffer_to_size.end()) {
     get_item.emitOpError("found tf.TensorListGetItemOp on unknown TensorList.");
     return failure();
   }
   OpBuilder builder(get_item);
-  auto index = cutil::ReshapeScalarToSizeType(builder, get_item.index(),
+  auto index = cutil::ReshapeScalarToSizeType(builder, get_item.getIndex(),
                                               get_item.getLoc());
   auto element =
       cutil::GetElement(index, buffer, OpBuilder(get_item), get_item.getLoc());
-  get_item.item().replaceAllUsesWith(element);
+  get_item.getItem().replaceAllUsesWith(element);
   get_item.erase();
   return success();
 }
@@ -696,18 +714,18 @@ LogicalResult HandleTensorListGetItemOp(
 LogicalResult HandleTensorListSetItemOp(
     TF::TensorListSetItemOp set_item,
     llvm::SmallDenseMap<Value, SizeInfo>* buffer_to_size) {
-  auto buffer = set_item.input_handle();
+  auto buffer = set_item.getInputHandle();
   auto it = buffer_to_size->find(buffer);
   if (it == buffer_to_size->end()) {
     set_item.emitOpError("found tf.TensorListSetItemOp on unknown TensorList.");
     return failure();
   }
   OpBuilder builder(set_item);
-  auto index = cutil::ReshapeScalarToSizeType(builder, set_item.index(),
+  auto index = cutil::ReshapeScalarToSizeType(builder, set_item.getIndex(),
                                               set_item.getLoc());
-  auto new_buffer = cutil::SetElement(index, buffer, set_item.item(), builder,
-                                      set_item.getLoc());
-  set_item.output_handle().replaceAllUsesWith(new_buffer);
+  auto new_buffer = cutil::SetElement(index, buffer, set_item.getItem(),
+                                      builder, set_item.getLoc());
+  set_item.getOutputHandle().replaceAllUsesWith(new_buffer);
   auto size = it->getSecond();
   (*buffer_to_size)[new_buffer] = size;
   set_item.erase();
@@ -717,7 +735,7 @@ LogicalResult HandleTensorListSetItemOp(
 LogicalResult HandleTensorListLengthOp(
     TF::TensorListLengthOp length,
     const llvm::SmallDenseMap<Value, SizeInfo>& buffer_to_size) {
-  auto it = buffer_to_size.find(length.input_handle());
+  auto it = buffer_to_size.find(length.getInputHandle());
   if (it == buffer_to_size.end()) {
     length.emitOpError("found tf.TensorListLength on unknown TensorList.");
     return failure();
@@ -725,19 +743,20 @@ LogicalResult HandleTensorListLengthOp(
   OpBuilder builder(length);
   if (it->getSecond().fixed) {
     auto dim = cutil::CreateScalarConst(
-        length.input_handle().getType().cast<RankedTensorType>().getDimSize(0),
+        mlir::cast<RankedTensorType>(length.getInputHandle().getType())
+            .getDimSize(0),
         builder, length.getLoc());
-    length.length().replaceAllUsesWith(dim);
+    length.getLength().replaceAllUsesWith(dim);
   } else {
     auto current_size = it->getSecond().size;
     // Reshapes the R1 length to a scalar.
-    auto reshape = builder.create<TF::ReshapeOp>(
-        length.getLoc(),
+    auto reshape = TF::ReshapeOp::create(
+        builder, length.getLoc(),
         ArrayRef<Type>{RankedTensorType::get(
             {}, getElementTypeOrSelf(current_size.getType()))},
         ArrayRef<Value>{current_size,
                         cutil::GetR1Const({}, builder, length.getLoc())});
-    length.length().replaceAllUsesWith(reshape);
+    length.getLength().replaceAllUsesWith(reshape);
   }
   length.erase();
   return success();
@@ -746,15 +765,15 @@ LogicalResult HandleTensorListLengthOp(
 LogicalResult HandleTensorListElementShapeOp(
     TF::TensorListElementShapeOp elem_shape,
     const llvm::SmallDenseMap<Value, SizeInfo>& buffer_to_size) {
-  if (buffer_to_size.count(elem_shape.input_handle()) == 0) {
+  if (buffer_to_size.count(elem_shape.getInputHandle()) == 0) {
     return elem_shape.emitOpError("unknown tensor list");
   }
-  auto buffer = elem_shape.input_handle();
+  auto buffer = elem_shape.getInputHandle();
   auto result = cutil::GetR1Const(
-      buffer.getType().cast<RankedTensorType>().getShape().drop_front(),
+      mlir::cast<RankedTensorType>(buffer.getType()).getShape().drop_front(),
       OpBuilder(elem_shape), elem_shape.getLoc(),
-      elem_shape.shape_type().getIntOrFloatBitWidth());
-  elem_shape.element_shape().replaceAllUsesWith(result);
+      elem_shape.getShapeType().getIntOrFloatBitWidth());
+  elem_shape.getElementShape().replaceAllUsesWith(result);
   elem_shape.erase();
   return success();
 }
@@ -762,14 +781,14 @@ LogicalResult HandleTensorListElementShapeOp(
 LogicalResult HandleTensorListGatherOp(
     TF::TensorListGatherOp gather,
     const llvm::SmallDenseMap<Value, SizeInfo>& buffer_to_size) {
-  auto it = buffer_to_size.find(gather.input_handle());
+  auto it = buffer_to_size.find(gather.getInputHandle());
   if (it == buffer_to_size.end()) {
     return gather.emitOpError("unknown tensor list");
   }
-  auto buffer = gather.input_handle();
-  auto result = cutil::GatherElements(gather.indices(), buffer,
+  auto buffer = gather.getInputHandle();
+  auto result = cutil::GatherElements(gather.getIndices(), buffer,
                                       OpBuilder(gather), gather.getLoc());
-  gather.values().replaceAllUsesWith(result);
+  gather.getValues().replaceAllUsesWith(result);
   gather.erase();
   return success();
 }
@@ -777,24 +796,25 @@ LogicalResult HandleTensorListGatherOp(
 LogicalResult HandleTensorListScatterIntoExistingListOp(
     TF::TensorListScatterIntoExistingListOp scatter,
     llvm::SmallDenseMap<Value, SizeInfo>* buffer_to_size) {
-  auto it = buffer_to_size->find(scatter.input_handle());
+  auto it = buffer_to_size->find(scatter.getInputHandle());
   if (it == buffer_to_size->end()) {
     return scatter.emitOpError("unknown tensor list");
   }
-  auto buffer = scatter.input_handle();
+  auto buffer = scatter.getInputHandle();
   OpBuilder builder(scatter);
-  auto indices_type = scatter.indices().getType().cast<RankedTensorType>();
+  auto indices_type =
+      mlir::cast<RankedTensorType>(scatter.getIndices().getType());
   if (!indices_type) return scatter.emitOpError("unranked indices shape");
   auto shape_type = RankedTensorType::get({2}, builder.getIntegerType(32));
-  auto shape = builder.create<TF::ConstOp>(
-      scatter.getLoc(),
+  auto shape = TF::ConstOp::create(
+      builder, scatter.getLoc(),
       DenseElementsAttr::get(
           shape_type, {static_cast<int>(indices_type.getDimSize(0)), 1}));
-  auto indices =
-      builder.create<TF::ReshapeOp>(scatter.getLoc(), scatter.indices(), shape);
-  Value tensor_scatter_update = builder.create<TF::TensorScatterUpdateOp>(
-      scatter.getLoc(), buffer, indices, scatter.tensor());
-  scatter.output_handle().replaceAllUsesWith(tensor_scatter_update);
+  auto indices = TF::ReshapeOp::create(builder, scatter.getLoc(),
+                                       scatter.getIndices(), shape);
+  Value tensor_scatter_update = TF::TensorScatterUpdateOp::create(
+      builder, scatter.getLoc(), buffer, indices, scatter.getTensor());
+  scatter.getOutputHandle().replaceAllUsesWith(tensor_scatter_update);
   scatter.erase();
   auto size = it->getSecond();
   (*buffer_to_size)[tensor_scatter_update] = size;
@@ -844,7 +864,7 @@ LogicalResult DecomposeTensorListOpsInternal(
         return failure();
       }
     } else if (auto stack = llvm::dyn_cast<TF::TensorListStackOp>(&op)) {
-      stack.tensor().replaceAllUsesWith(stack.input_handle());
+      stack.getTensor().replaceAllUsesWith(stack.getInputHandle());
       stack.erase();
     } else if (auto elem_shape =
                    llvm::dyn_cast<TF::TensorListElementShapeOp>(&op)) {
@@ -865,15 +885,16 @@ LogicalResult DecomposeTensorListOpsInternal(
     } else if (auto addn = llvm::dyn_cast<TF::AddNOp>(&op)) {
       auto it = buffer_to_size->find(addn.getOperand(0));
       if (it != buffer_to_size->end()) {
-        addn.sum().setType(addn.getOperand(0).getType());
+        addn.getSum().setType(
+            mlir::cast<TensorType>(addn.getOperand(0).getType()));
         auto size = it->getSecond();
-        (*buffer_to_size)[addn.sum()] = size;
+        (*buffer_to_size)[addn.getSum()] = size;
       }
     } else if (auto zeros = llvm::dyn_cast<TF::ZerosLikeOp>(&op)) {
-      if (buffer_to_size->count(zeros.x()) > 0) {
-        zeros.y().setType(zeros.x().getType());
-        auto size = (*buffer_to_size)[zeros.x()];
-        (*buffer_to_size)[zeros.y()] = size;
+      if (buffer_to_size->count(zeros.getX()) > 0) {
+        zeros.getY().setType(zeros.getX().getType());
+        auto size = (*buffer_to_size)[zeros.getX()];
+        (*buffer_to_size)[zeros.getY()] = size;
       }
     } else if (auto while_op = llvm::dyn_cast<TF::WhileOp>(&op)) {
       if (failed(HandleWhileOp(while_op, module, buffer_to_size,

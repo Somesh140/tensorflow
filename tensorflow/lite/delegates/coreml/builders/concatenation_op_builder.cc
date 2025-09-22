@@ -16,8 +16,10 @@ limitations under the License.
 
 #include <memory>
 
-#include "tensorflow/lite/c/builtin_op_data.h"
-#include "tensorflow/lite/c/common.h"
+#include "mlmodel/format/NeuralNetwork.pb.h"
+#include "tensorflow/lite/core/c/builtin_op_data.h"
+#include "tensorflow/lite/core/c/common.h"
+#include "tensorflow/lite/delegates/coreml/builders/op_builder.h"
 #include "tensorflow/lite/delegates/coreml/builders/op_validator.h"
 
 namespace tflite {
@@ -37,7 +39,7 @@ TfLiteStatus ConcatenationOpBuilder::RegisterInputs(
     const TfLiteIntArray* inputs, TfLiteContext* context) {
   if (inputs->size < 2) {
     TF_LITE_KERNEL_LOG(
-        context, "ConcatenationOpBuidler: at least 2 inputs are required.");
+        context, "ConcatenationOpBuilder: at least 2 inputs are required.");
     return kTfLiteError;
   }
   for (int i = 0; i < inputs->size; ++i) {

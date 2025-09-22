@@ -14,6 +14,9 @@ limitations under the License.
 ==============================================================================*/
 
 #include <fstream>
+#include <ios>
+#include <iterator>
+#include <sstream>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -22,7 +25,7 @@ limitations under the License.
 namespace {
 
 const char* kHeaderFileName =
-    "tensorflow/lite/core/shims/builtin_ops_list.inc";
+    "tensorflow/lite/kernels/builtin_ops_list.inc";
 
 // The test ensures that `builtin_ops_list.inc` header is consistent with the
 // FlatBuffer schema definition. When the schema is modified, it's required to

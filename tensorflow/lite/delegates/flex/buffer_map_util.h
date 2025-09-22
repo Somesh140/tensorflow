@@ -18,7 +18,7 @@ limitations under the License.
 #include "tensorflow/core/framework/allocation_description.pb.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/platform/status.h"
-#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/core/c/common.h"
 
 namespace tflite {
 namespace flex {
@@ -55,6 +55,11 @@ class TfLiteTensorBuffer : public BaseTfLiteTensorBuffer {
   ~TfLiteTensorBuffer() override;
 
   inline size_t size() const override { return len_; }
+
+  // Indicates that `TfLiteTensorBuffer` is responsible for deallocating its
+  // underlying buffer. This buffer must have been allocated by
+  // `tensorflow::cpu_allocator`
+  inline void TakeOwnershipOfBuffer() { reused_buffer_from_tflite_ = false; }
 
   inline bool BufferReusedFromTfLiteTensor() const {
     return reused_buffer_from_tflite_;
@@ -95,9 +100,9 @@ class StringTfLiteTensorBuffer : public BaseTfLiteTensorBuffer {
 // Sets the `tensorflow::Tensor` content from `TfLiteTensor` object. If
 // `allow_reusing=false`, then we explicitly disallow reusing the TF Lite
 // tensor buffer when constructing the new tensorflow Tensor.
-tensorflow::Status SetTfTensorFromTfLite(const TfLiteTensor* tensor,
-                                         tensorflow::Tensor* tf_tensor,
-                                         bool allow_reusing = true);
+absl::Status SetTfTensorFromTfLite(const TfLiteTensor* tensor,
+                                   tensorflow::Tensor* tf_tensor,
+                                   bool allow_reusing = true);
 
 }  // namespace flex
 }  // namespace tflite

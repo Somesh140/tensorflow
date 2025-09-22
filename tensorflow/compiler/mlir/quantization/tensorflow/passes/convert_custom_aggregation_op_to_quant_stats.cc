@@ -13,21 +13,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <tuple>
 #include <utility>
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/SourceMgr.h"
-#include "mlir/Dialect/Quant/QuantOps.h"  // from @llvm-project
+#include "mlir/Dialect/Quant/IR/Quant.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/quantization/common/ir/QuantOps.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/passes/passes.h"
+#include "tensorflow/compiler/mlir/quantization/tensorflow/passes/tf_quant_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 
@@ -55,30 +59,29 @@ class ConvertCustomAggregationOpToQuantStatsPass
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<TF::TensorFlowDialect>();
-    registry.insert<QuantizationDialect>();
+    registry.insert<quant::QuantDialect>();
+    registry.insert<mlir::quant::ir::TFQuantDialect>();
   }
 
   void runOnOperation() override;
 };
 
-class ConvertCustomAggregationOpToQuantStats : public RewritePattern {
+class ConvertCustomAggregationOpToQuantStats
+    : public OpRewritePattern<TF::CustomAggregatorOp> {
  public:
   // Does not take ownership of context, which must refer to a valid value that
   // outlives this object.
   explicit ConvertCustomAggregationOpToQuantStats(MLIRContext *context)
-      : RewritePattern(MatchAnyOpTypeTag(), /*benefit=*/1, context) {}
+      : OpRewritePattern<TF::CustomAggregatorOp>(context) {}
 
-  LogicalResult matchAndRewrite(Operation *op,
+  LogicalResult matchAndRewrite(TF::CustomAggregatorOp op,
                                 PatternRewriter &rewriter) const override {
-    // Return early if the given operator isn't the custom aggregator op.
-    if (op->getName().getStringRef() != "tf.CustomAggregator") return failure();
-
-    FloatAttr min = op->getAttr("min").dyn_cast_or_null<FloatAttr>();
-    FloatAttr max = op->getAttr("max").dyn_cast_or_null<FloatAttr>();
+    FloatAttr min = mlir::dyn_cast_or_null<FloatAttr>(op->getAttr("min"));
+    FloatAttr max = mlir::dyn_cast_or_null<FloatAttr>(op->getAttr("max"));
 
     // When there are no min and max attributes, remove op.
     if (min == nullptr || max == nullptr) {
-      op->replaceAllUsesWith(op->getOperands());
+      op.getOutput().replaceAllUsesWith(op.getInput());
       rewriter.eraseOp(op);
       return success();
     }
@@ -91,8 +94,10 @@ class ConvertCustomAggregationOpToQuantStats : public RewritePattern {
     ElementsAttr axis_stats;
     IntegerAttr axis;
 
-    rewriter.replaceOpWithNewOp<StatisticsOp>(op, op->getOperand(0),
-                                              layer_stats, axis_stats, axis);
+    mlir::quant::ir::StatisticsOp stats_op =
+        rewriter.create<mlir::quant::ir::StatisticsOp>(
+            op->getLoc(), op.getInput(), layer_stats, axis_stats, axis);
+    op.getOutput().replaceAllUsesWith(stats_op.getResult());
     return success();
   }
 };
@@ -105,7 +110,7 @@ void ConvertCustomAggregationOpToQuantStatsPass::runOnOperation() {
   func::FuncOp func = getOperation();
 
   patterns.add<ConvertCustomAggregationOpToQuantStats>(ctx);
-  if (failed(applyPatternsAndFoldGreedily(func, std::move(patterns)))) {
+  if (failed(applyPatternsGreedily(func, std::move(patterns)))) {
     func.emitError()
         << "quant-convert-tf-custom-aggregator-op-to-quant-stats failed.";
     signalPassFailure();

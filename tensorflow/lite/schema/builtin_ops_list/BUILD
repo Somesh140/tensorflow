@@ -1,5 +1,5 @@
 # This package contains code to auto-generate the contents of the file
-#   tensorflow/lite/core/shims:builtin_ops_list.inc
+#   tensorflow/lite/kernels:builtin_ops_list.inc
 # from the BuiltinOperator enum in the FlatBuffer schema,
 # and a test to verify that the checked-in copy remains up-to-date.
 
@@ -7,7 +7,12 @@
 # the code in ../builtin_ops_header/, i.e. have a single tool generate
 # both the builtin_ops.h header and the builtin_ops_list.inc file?
 
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = [
         "//visibility:public",
     ],
@@ -44,7 +49,7 @@ cc_test(
     name = "consistency_test",
     srcs = ["consistency_test.cc"],
     data = [
-        "//tensorflow/lite/core/shims:builtin_ops_list.inc",
+        "//tensorflow/lite/kernels:builtin_ops_list.inc",
     ],
     deps = [
         ":generator",

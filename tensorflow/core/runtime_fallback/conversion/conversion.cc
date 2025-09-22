@@ -18,11 +18,19 @@ limitations under the License.
 
 #include "tensorflow/core/runtime_fallback/conversion/conversion.h"
 
+#include <cassert>
+#include <utility>
+
+#include "absl/status/status.h"
+#include "tensorflow/core/common_runtime/eager/tensor_handle.h"
+#include "tensorflow/core/framework/device.h"
+#include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.pb.h"
+#include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/runtime_fallback/kernel/kernel_fallback_tensor.h"
 #include "tensorflow/core/runtime_fallback/kernel/tensor_util.h"
+#include "tensorflow/core/runtime_fallback/runtime/kernel_utils.h"
 #include "tensorflow/core/runtime_fallback/runtime/runtime_fallback_tensor.h"
-#include "tensorflow/core/tfrt/utils/error_util.h"
 #include "tfrt/host_context/async_value_ref.h"  // from @tf_runtime
 #include "tfrt/host_context/device.h"  // from @tf_runtime
 #include "tfrt/tensor/conversion_registry.h"  // from @tf_runtime
@@ -39,12 +47,12 @@ static RuntimeFallbackTensor ConvertKernelFallbackToRuntimeFallbackTensor(
       exec_ctx.resource_context()
           ->GetResource<tensorflow::tfd::EagerContextResource>(
               tensorflow::tfd::kEagerContextResourceName);
-  assert(optional_eager_resource.hasValue());
+  assert(optional_eager_resource.has_value());
   auto expected_eager_context =
-      optional_eager_resource.getValue()->GetTFEagerContext();
+      optional_eager_resource.value()->GetTFEagerContext();
   assert(expected_eager_context);
   Device *d;
-  Status s =
+  absl::Status s =
       expected_eager_context.get()->FindDeviceFromName(src.name().data(), &d);
   assert(s.ok());
   Tensor t(*tensor.GetTensor());
@@ -64,9 +72,9 @@ ConvertRuntimeFallbackToKernelFallbackTensor(
     const RuntimeFallbackTensor &tensor, const tfrt::Device &src,
     const tfrt::Device &dst, const tfrt::ExecutionContext &exec_ctx) {
   const tensorflow::Tensor *tf_tensor;
-  Status s = tensor.GetTensorHandle()->Tensor(&tf_tensor);
+  absl::Status s = tensor.GetTensorHandle()->Tensor(&tf_tensor);
   if (!s.ok()) {
-    return tfrt::MakeErrorAsyncValueRef(s.error_message());
+    return tfrt::MakeErrorAsyncValueRef(s.message());
   }
   auto src_knfb_tensor =
       KernelFallbackTensor(tensor.shape(), tensor.dtype(), *tf_tensor);

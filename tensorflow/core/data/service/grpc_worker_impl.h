@@ -19,6 +19,7 @@ limitations under the License.
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "grpcpp/server_builder.h"
 #include "tensorflow/core/data/service/export.pb.h"
@@ -40,11 +41,12 @@ class GrpcWorkerImpl : public WorkerService::Service {
                           ::grpc::ServerBuilder& server_builder);
   ~GrpcWorkerImpl() override { Stop(); }
 
-  Status Start(const std::string& worker_address,
-               const std::string& transfer_address);
+  absl::Status Start(
+      const std::string& worker_address,
+      const std::vector<DataTransferServerInfo>& transfer_servers);
   void Stop();
 
-  std::function<Status(const GetElementRequest*, GetElementResult*)>
+  std::function<absl::Status(const GetElementRequest*, GetElementResult*)>
   get_element_getter() {
     return [this](const GetElementRequest* request, GetElementResult* result) {
       return impl_->GetElementResult(request, result);
@@ -60,6 +62,7 @@ class GrpcWorkerImpl : public WorkerService::Service {
   HANDLER(ProcessTask);
   HANDLER(GetElement);
   HANDLER(GetWorkerTasks);
+  HANDLER(GetSnapshotTaskProgresses);
 #undef HANDLER
 
  private:
@@ -68,7 +71,8 @@ class GrpcWorkerImpl : public WorkerService::Service {
   // the servers' methods to avoid RPC calls and data copy.
   std::shared_ptr<DataServiceWorkerImpl> impl_;
 
-  TF_DISALLOW_COPY_AND_ASSIGN(GrpcWorkerImpl);
+  GrpcWorkerImpl(const GrpcWorkerImpl&) = delete;
+  void operator=(const GrpcWorkerImpl&) = delete;
 };
 
 }  // namespace data

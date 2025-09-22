@@ -28,15 +28,17 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"
+#include "tensorflow/compiler/mlir/lite/quantization/common/quantization_lib/quantization_utils.h"
 #include "tensorflow/compiler/mlir/lite/transforms/passes.h"
 
 namespace mlir {
 namespace TFL {
 namespace {
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_MODIFYIONODESPASS
 #include "tensorflow/compiler/mlir/lite/transforms/passes.h.inc"
 
-struct ModifyIONodesPass : public ModifyIONodesPassBase<ModifyIONodesPass> {
+struct ModifyIONodesPass
+    : public impl::ModifyIONodesPassBase<ModifyIONodesPass> {
  public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ModifyIONodesPass)
 
@@ -93,7 +95,7 @@ LogicalResult ModifyIONodesPass::SetupInputOutputTypesIfNull(
 LogicalResult ModifyIONodesPass::ModifyInputNodes(
     func::FuncOp func, llvm::SmallVectorImpl<Type>& new_input_types,
     OpBuilder builder) {
-  if (input_type.isa<FloatType>()) {
+  if (mlir::isa<FloatType>(input_type)) {
     return success();
   }
 
@@ -107,7 +109,7 @@ LogicalResult ModifyIONodesPass::ModifyInputNodes(
     Location loc = func.getLoc();
     if (arg.hasOneUse() && llvm::isa<QuantizeOp>(*arg.user_begin())) {
       auto quantize_op = llvm::cast<QuantizeOp>(*arg.user_begin());
-      auto quantize_output = quantize_op.output();
+      auto quantize_output = quantize_op.getOutput();
       auto current_type = quant::QuantizedType::getQuantizedElementType(
                               quantize_output.getType())
                               .getStorageType();
@@ -117,8 +119,8 @@ LogicalResult ModifyIONodesPass::ModifyInputNodes(
         quantize_output.replaceAllUsesWith(new_arg);
       } else if (input_type.isUnsignedInteger(
                      current_type.getIntOrFloatBitWidth())) {  // int8 != uint8
-        arg_type = quant::ConvertSignedQuantizedToUnsigned(
-            quantize_output.getType(), loc);
+        arg_type =
+            ConvertSignedQuantizedToUnsigned(quantize_output.getType(), loc);
         new_arg = block.addArgument(arg_type, loc);
         quantize_op.setOperand(new_arg);
       } else {
@@ -150,7 +152,7 @@ LogicalResult ModifyIONodesPass::ModifyOutputNodes(
   auto* terminator = block.getTerminator();
   builder.setInsertionPoint(terminator);
 
-  if (output_type.isa<FloatType>()) {
+  if (mlir::isa<FloatType>(output_type)) {
     return success();
   }
 
@@ -162,7 +164,7 @@ LogicalResult ModifyIONodesPass::ModifyOutputNodes(
     Operation* returned_op = returned_value.getDefiningOp();
     if (returned_op && llvm::isa<DequantizeOp>(returned_op)) {
       auto dequantize_op = llvm::cast<DequantizeOp>(returned_op);
-      auto dequantize_input = dequantize_op.input();
+      auto dequantize_input = dequantize_op.getInput();
       Type current_type = quant::QuantizedType::getQuantizedElementType(
                               dequantize_input.getType())
                               .getStorageType();
@@ -171,13 +173,14 @@ LogicalResult ModifyIONodesPass::ModifyOutputNodes(
         returned_value = dequantize_input;
       } else if (output_type.isUnsignedInteger(
                      current_type.getIntOrFloatBitWidth())) {  // int8 != uint8
-        returned_type = quant::ConvertSignedQuantizedToUnsigned(
+        returned_type = ConvertSignedQuantizedToUnsigned(
             dequantize_input.getType(), dequantize_op.getLoc());
         // replace the dequantize op by a quantize op
         TypeAttr type_attr = TypeAttr::get(returned_type);
-        auto quantize_op = builder.create<QuantizeOp>(
-            dequantize_op.getLoc(), returned_type, dequantize_input, type_attr);
-        returned_value = quantize_op.output();
+        auto quantize_op =
+            QuantizeOp::create(builder, dequantize_op.getLoc(), returned_type,
+                               dequantize_input, type_attr);
+        returned_value = quantize_op.getOutput();
       } else {
         output_type.print(llvm::errs() << "Requested output type ");
         dequantize_op.emitError(" Couldn't be modified to the requested type.");

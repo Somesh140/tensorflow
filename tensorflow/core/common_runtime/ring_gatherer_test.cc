@@ -104,9 +104,8 @@ class RingGathererTest : public ::testing::Test {
     if (fail_after > 0) {
       // Confirm that every device terminated with the expected error status.
       for (int di = 0; di < static_cast<int>(instances_.size()); ++di) {
-        EXPECT_NE(
-            instances_[di]->status_.error_message().find("Deliberate failure"),
-            string::npos);
+        EXPECT_NE(instances_[di]->status_.message().find("Deliberate failure"),
+                  string::npos);
       }
     } else {
       // Confirm that every device accumulated the same set of correct
@@ -158,7 +157,7 @@ class RingGathererTest : public ::testing::Test {
     Tensor output_tensor_;
     Device* device_;
     core::RefCountPtr<CollectiveParams> col_params_;
-    Status status_;
+    absl::Status status_;
   };
 
   std::unique_ptr<CollectiveTestEnv> test_env_;

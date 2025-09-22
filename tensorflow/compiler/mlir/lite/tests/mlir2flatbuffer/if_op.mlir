@@ -25,14 +25,16 @@
 // CHECK-NEXT:       name: "arg0",
 // CHECK-NEXT:       quantization: {
 // CHECK-EMPTY:
-// CHECK-NEXT:       }
+// CHECK-NEXT:       },
+// CHECK-NEXT:       has_rank: true
 // CHECK-NEXT:     }, {
 // CHECK-NEXT:       shape: [ 1 ],
 // CHECK-NEXT:       buffer: 2,
 // CHECK-NEXT:       name: "arg1",
 // CHECK-NEXT:       quantization: {
 // CHECK-EMPTY:
-// CHECK-NEXT:       }
+// CHECK-NEXT:       },
+// CHECK-NEXT:       has_rank: true
 // CHECK-NEXT:     }, {
 // CHECK-NEXT:       shape: [ 1 ],
 // CHECK-NEXT:       type: BOOL,
@@ -40,14 +42,16 @@
 // CHECK-NEXT:       name: "tfl.less",
 // CHECK-NEXT:       quantization: {
 // CHECK-EMPTY:
-// CHECK-NEXT:       }
+// CHECK-NEXT:       },
+// CHECK-NEXT:       has_rank: true
 // CHECK-NEXT:     }, {
 // CHECK-NEXT:       shape: [ 1 ],
 // CHECK-NEXT:       buffer: 4,
 // CHECK-NEXT:       name: "tf.If",
 // CHECK-NEXT:       quantization: {
 // CHECK-EMPTY:
-// CHECK-NEXT:       }
+// CHECK-NEXT:       },
+// CHECK-NEXT:       has_rank: true
 // CHECK-NEXT:     } ],
 // CHECK-NEXT:     inputs: [ 0, 1 ],
 // CHECK-NEXT:     outputs: [ 3 ],
@@ -69,14 +73,14 @@
 // CHECK-NEXT:     tensors: [ {
 // CHECK-NEXT:       shape: [  ],
 // CHECK-NEXT:       buffer: 5,
-// CHECK-NEXT:       name: "arg0",
+// CHECK-NEXT:       name: "cond_true_arg0",
 // CHECK-NEXT:       quantization: {
 // CHECK-EMPTY:
 // CHECK-NEXT:       }
 // CHECK-NEXT:     }, {
 // CHECK-NEXT:       shape: [  ],
 // CHECK-NEXT:       buffer: 6,
-// CHECK-NEXT:       name: "arg1",
+// CHECK-NEXT:       name: "cond_true_arg1",
 // CHECK-NEXT:       quantization: {
 // CHECK-EMPTY:
 // CHECK-NEXT:       }
@@ -104,14 +108,14 @@
 // CHECK-NEXT:     tensors: [ {
 // CHECK-NEXT:       shape: [  ],
 // CHECK-NEXT:       buffer: 8,
-// CHECK-NEXT:       name: "arg0",
+// CHECK-NEXT:       name: "cond_false_arg0",
 // CHECK-NEXT:       quantization: {
 // CHECK-EMPTY:
 // CHECK-NEXT:       }
 // CHECK-NEXT:     }, {
 // CHECK-NEXT:       shape: [  ],
 // CHECK-NEXT:       buffer: 9,
-// CHECK-NEXT:       name: "arg1",
+// CHECK-NEXT:       name: "cond_false_arg1",
 // CHECK-NEXT:       quantization: {
 // CHECK-EMPTY:
 // CHECK-NEXT:       }

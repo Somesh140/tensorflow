@@ -20,7 +20,7 @@ PYTHON="${CI_BUILD_PYTHON:-python3}"
 VERSION_SUFFIX=${VERSION_SUFFIX:-}
 export TENSORFLOW_DIR="${SCRIPT_DIR}/../../../.."
 TENSORFLOW_LITE_DIR="${TENSORFLOW_DIR}/tensorflow/lite"
-TENSORFLOW_VERSION=$(grep "_VERSION = " "${TENSORFLOW_DIR}/tensorflow/tools/pip_package/setup.py" | cut -d= -f2 | sed "s/[ '-]//g")
+TENSORFLOW_VERSION=$(grep "TF_VERSION = " "${TENSORFLOW_DIR}/tensorflow/tf_version.bzl" | cut -d= -f2 | sed 's/[ "-]//g')
 export PACKAGE_VERSION="${TENSORFLOW_VERSION}${VERSION_SUFFIX}"
 export PROJECT_NAME=${WHEEL_PROJECT_NAME:-tflite_runtime}
 BUILD_DIR="${SCRIPT_DIR}/gen/tflite_pip/${PYTHON}"
@@ -69,6 +69,13 @@ case "${TENSORFLOW_TARGET}" in
       --define tensorflow_mkldnn_contraction_kernel=0
       --define=raspberry_pi_with_neon=true"
     ;;
+  rpi0)
+    BAZEL_FLAGS="--config=elinux_armhf
+      --copt=-march=armv6 -mfpu=vfp -mfloat-abi=hard
+      --copt=-O3 --copt=-fno-tree-pre --copt=-fpermissive
+      --define tensorflow_mkldnn_contraction_kernel=0
+      --define=raspberry_pi_with_neon=true"
+    ;;
   aarch64)
     BAZEL_FLAGS="--config=elinux_aarch64
       --define tensorflow_mkldnn_contraction_kernel=0
@@ -95,7 +102,7 @@ case "${TENSORFLOW_TARGET}" in
     ;;
 esac
 
-bazel ${BAZEL_STARTUP_OPTIONS} build -c opt -s --config=monolithic --config=noaws --config=nogcp --config=nohdfs --config=nonccl \
+bazel ${BAZEL_STARTUP_OPTIONS} build -c opt -s --config=monolithic --config=nogcp --config=nonccl \
   ${BAZEL_FLAGS} ${CUSTOM_BAZEL_FLAGS} //tensorflow/lite/python/interpreter_wrapper:_pywrap_tensorflow_interpreter_wrapper
 cp "${TENSORFLOW_DIR}/bazel-bin/tensorflow/lite/python/interpreter_wrapper/_pywrap_tensorflow_interpreter_wrapper${LIBRARY_EXTENSION}" \
    "${BUILD_DIR}/tflite_runtime"
@@ -112,15 +119,20 @@ case "${TENSORFLOW_TARGET}" in
     ${PYTHON} setup.py bdist --plat-name=${WHEEL_PLATFORM_NAME} \
                        bdist_wheel --plat-name=${WHEEL_PLATFORM_NAME}
     ;;
+  rpi0)
+    WHEEL_PLATFORM_NAME="${WHEEL_PLATFORM_NAME:-linux-armv6l}"
+    ${PYTHON} setup.py bdist --plat-name=${WHEEL_PLATFORM_NAME} \
+                       bdist_wheel --plat-name=${WHEEL_PLATFORM_NAME}
+    ;;
   aarch64)
     WHEEL_PLATFORM_NAME="${WHEEL_PLATFORM_NAME:-linux-aarch64}"
     ${PYTHON} setup.py bdist --plat-name=${WHEEL_PLATFORM_NAME} \
                        bdist_wheel --plat-name=${WHEEL_PLATFORM_NAME}
     ;;
   *)
-    if [[ -n "${TENSORFLOW_TARGET}" ]] && [[ -n "${TENSORFLOW_TARGET_ARCH}" ]]; then
-      ${PYTHON} setup.py bdist --plat-name=${TENSORFLOW_TARGET}-${TENSORFLOW_TARGET_ARCH} \
-                         bdist_wheel --plat-name=${TENSORFLOW_TARGET}-${TENSORFLOW_TARGET_ARCH}
+    if [[ -n "${WHEEL_PLATFORM_NAME}" ]]; then
+      ${PYTHON} setup.py bdist --plat-name=${WHEEL_PLATFORM_NAME} \
+                         bdist_wheel --plat-name=${WHEEL_PLATFORM_NAME}
     else
       ${PYTHON} setup.py bdist bdist_wheel
     fi
@@ -157,6 +169,9 @@ fi
 case "${TENSORFLOW_TARGET}" in
   armhf)
     dpkg-buildpackage -b -rfakeroot -us -uc -tc -d -a armhf
+    ;;
+  rpi0)
+    dpkg-buildpackage -b -rfakeroot -us -uc -tc -d -a armel
     ;;
   aarch64)
     dpkg-buildpackage -b -rfakeroot -us -uc -tc -d -a arm64

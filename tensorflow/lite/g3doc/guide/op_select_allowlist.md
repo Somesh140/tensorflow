@@ -81,11 +81,13 @@ supported by TensorFlow Lite runtime with the Select TensorFlow Ops feature.
 *   `raw_ops.Bucketize`
 *   `raw_ops.CTCBeamSearchDecoder`
 *   `raw_ops.CTCGreedyDecoder`
+*   `raw_ops.Case`
 *   `raw_ops.Cast`
 *   `raw_ops.Ceil`
 *   `raw_ops.CheckNumerics`
 *   `raw_ops.CheckNumericsV2`
 *   `raw_ops.Cholesky`
+*   `raw_ops.ClipByValue`
 *   `raw_ops.CombinedNonMaxSuppression`
 *   `raw_ops.Complex`
 *   `raw_ops.ComplexAbs`
@@ -589,6 +591,7 @@ supported by TensorFlow Lite runtime with the Select TensorFlow Ops feature.
 *   `raw_ops.StackV2`
 *   `raw_ops.StatelessMultinomial`
 *   `raw_ops.StatelessRandomGammaV2`
+*   `raw_ops.StatelessRandomGammaV3`
 *   `raw_ops.StatelessRandomGetAlg`
 *   `raw_ops.StatelessRandomGetKeyCounter`
 *   `raw_ops.StatelessRandomGetKeyCounterAlg`
@@ -876,9 +879,9 @@ filegroup(
 (2) Add the operator name to the allowed list.
 
 The allowed list is defined in the
-`tensorflow/lite/delegates/flex/allowlisted_flex_ops.cc`. The TensorFlow core
-operator name is need to be listed in order to be allowed through the Select TF
-option.
+`tensorflow/compiler/mlir/lite/delegates/flex/allowlisted_flex_ops.cc`. The
+TensorFlow core operator name is need to be listed in order to be allowed
+through the Select TF option.
 
 ```
 static const std::set<std::string>* allowlisted_flex_ops =

@@ -14,9 +14,12 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/data/service/journal.h"
 
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "absl/memory/memory.h"
+#include "absl/status/status.h"
 #include "tensorflow/core/data/service/common.pb.h"
 #include "tensorflow/core/data/service/journal.pb.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
@@ -64,8 +67,8 @@ Update MakeRegisterDatasetUpdate() {
   return update;
 }
 
-Status CheckJournalContent(StringPiece journal_dir,
-                           const std::vector<Update>& expected) {
+absl::Status CheckJournalContent(absl::string_view journal_dir,
+                                 const std::vector<Update>& expected) {
   FileJournalReader reader(Env::Default(), journal_dir);
   for (const auto& update : expected) {
     Update result;
@@ -80,7 +83,7 @@ Status CheckJournalContent(StringPiece journal_dir,
   bool end_of_journal = false;
   TF_RETURN_IF_ERROR(reader.Read(result, end_of_journal));
   EXPECT_TRUE(end_of_journal);
-  return OkStatus();
+  return absl::OkStatus();
 }
 }  // namespace
 
@@ -118,8 +121,8 @@ TEST(Journal, MissingFile) {
   FileJournalReader reader(Env::Default(), journal_dir);
   Update result;
   bool end_of_journal = true;
-  Status s = reader.Read(result, end_of_journal);
-  EXPECT_TRUE(errors::IsNotFound(s));
+  absl::Status s = reader.Read(result, end_of_journal);
+  EXPECT_TRUE(absl::IsNotFound(s));
 }
 
 TEST(Journal, NonRecordData) {
@@ -137,8 +140,8 @@ TEST(Journal, NonRecordData) {
   FileJournalReader reader(Env::Default(), journal_dir);
   Update result;
   bool end_of_journal = true;
-  Status s = reader.Read(result, end_of_journal);
-  EXPECT_THAT(s.error_message(), HasSubstr("corrupted record"));
+  absl::Status s = reader.Read(result, end_of_journal);
+  EXPECT_THAT(s.message(), HasSubstr("corrupted record"));
   EXPECT_EQ(s.code(), error::DATA_LOSS);
 }
 
@@ -158,8 +161,8 @@ TEST(Journal, InvalidRecordData) {
   FileJournalReader reader(Env::Default(), journal_dir);
   Update result;
   bool end_of_journal = true;
-  Status s = reader.Read(result, end_of_journal);
-  EXPECT_THAT(s.error_message(), HasSubstr("Failed to parse journal record"));
+  absl::Status s = reader.Read(result, end_of_journal);
+  EXPECT_THAT(s.message(), HasSubstr("Failed to parse journal record"));
   EXPECT_EQ(s.code(), error::DATA_LOSS);
 }
 }  // namespace data

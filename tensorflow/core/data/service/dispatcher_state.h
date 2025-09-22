@@ -15,6 +15,7 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_DATA_SERVICE_DISPATCHER_STATE_H_
 #define TENSORFLOW_CORE_DATA_SERVICE_DISPATCHER_STATE_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -25,10 +26,9 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
-#include "absl/types/optional.h"
-#include "tensorflow/core/data/service/auto_shard_rewriter.h"
 #include "tensorflow/core/data/service/common.h"
 #include "tensorflow/core/data/service/common.pb.h"
+#include "tensorflow/core/data/service/graph_rewriters.h"
 #include "tensorflow/core/data/service/journal.h"
 #include "tensorflow/core/data/service/journal.pb.h"
 #include "tensorflow/core/platform/status.h"
@@ -71,18 +71,15 @@ class DispatcherState {
   DispatcherState& operator=(const DispatcherState&) = delete;
 
   // Applies the given update to the dispatcher's state.
-  Status Apply(const Update& update);
+  absl::Status Apply(const Update& update);
 
   // A dataset registered with the dispatcher.
   struct Dataset {
-    explicit Dataset(const std::string& dataset_id, int64_t fingerprint,
+    explicit Dataset(const std::string& dataset_id,
                      const DataServiceMetadata& metadata)
-        : dataset_id(dataset_id),
-          fingerprint(fingerprint),
-          metadata(metadata) {}
+        : dataset_id(dataset_id), metadata(metadata) {}
 
     const std::string dataset_id;
-    const int64_t fingerprint;
     const DataServiceMetadata metadata;
   };
 
@@ -90,13 +87,14 @@ class DispatcherState {
   struct Worker {
     explicit Worker(const RegisterWorkerUpdate& register_worker)
         : address(register_worker.worker_address()),
-          transfer_address(register_worker.transfer_address()),
+          transfer_servers({register_worker.transfer_servers().begin(),
+                            register_worker.transfer_servers().end()}),
           tags(register_worker.worker_tags().begin(),
                register_worker.worker_tags().end()),
           uid(register_worker.worker_uid()) {}
 
     const std::string address;
-    const std::string transfer_address;
+    const std::vector<DataTransferServerInfo> transfer_servers;
     const std::vector<std::string> tags;
     const int64_t uid;
   };
@@ -168,7 +166,7 @@ class DispatcherState {
     const std::string dataset_id;
     const ProcessingModeDef processing_mode;
     const std::string job_name;
-    const absl::optional<int64_t> num_consumers;
+    const std::optional<int64_t> num_consumers;
     const bool use_cross_trainer_cache;
     const TargetWorkers target_workers;
   };
@@ -192,7 +190,7 @@ class DispatcherState {
     const int64_t iteration_id;
     const IterationKey iteration_key;
     const std::shared_ptr<Job> job;
-    absl::optional<DistributedEpochState> distributed_epoch_state;
+    std::optional<DistributedEpochState> distributed_epoch_state;
     std::queue<PendingTask> pending_tasks;
     int64_t num_clients = 0;
     int64_t last_client_released_micros = -1;
@@ -208,7 +206,8 @@ class DispatcherState {
         : task_id(create_task_update.task_id()),
           iteration(iteration),
           worker_address(create_task_update.worker_address()),
-          transfer_address(create_task_update.transfer_address()),
+          transfer_servers(create_task_update.transfer_servers().begin(),
+                           create_task_update.transfer_servers().end()),
           worker_tags(create_task_update.worker_tags().begin(),
                       create_task_update.worker_tags().end()),
           worker_uid(create_task_update.worker_uid()) {}
@@ -216,7 +215,7 @@ class DispatcherState {
     const int64_t task_id;
     const std::shared_ptr<Iteration> iteration;
     const std::string worker_address;
-    const std::string transfer_address;
+    const std::vector<DataTransferServerInfo> transfer_servers;
     const std::vector<std::string> worker_tags;
     const int64_t worker_uid;
     int64_t starting_round = 0;
@@ -230,42 +229,38 @@ class DispatcherState {
   std::string NextAvailableDatasetId() const;
 
   // Gets a dataset by id. Returns NOT_FOUND if there is no such dataset.
-  Status DatasetFromId(const std::string& id,
-                       std::shared_ptr<const Dataset>& dataset) const;
-  // Gets a dataset by fingerprint. Returns NOT_FOUND if there is no such
-  // dataset.
-  Status DatasetFromFingerprint(uint64 fingerprint,
-                                std::shared_ptr<const Dataset>& dataset) const;
+  absl::Status DatasetFromId(const std::string& id,
+                             std::shared_ptr<const Dataset>& dataset) const;
 
   // Gets a worker by address. Returns NOT_FOUND if there is no such worker.
-  Status WorkerFromAddress(const std::string& address,
-                           std::shared_ptr<const Worker>& worker) const;
+  absl::Status WorkerFromAddress(const std::string& address,
+                                 std::shared_ptr<const Worker>& worker) const;
   // Lists all workers registered with the dispatcher.
   std::vector<std::shared_ptr<const Worker>> ListWorkers() const;
 
   // Returns the next available job id.
   int64_t NextAvailableJobId() const;
   // Gets a job by id. Returns NOT_FOUND if there is no such job.
-  Status JobFromId(int64_t job_id, std::shared_ptr<const Job>& job) const;
+  absl::Status JobFromId(int64_t job_id, std::shared_ptr<const Job>& job) const;
   // Gets a job by name. Returns NOT_FOUND if there is no such job.
-  Status JobByName(const std::string& job_name,
-                   std::shared_ptr<const Job>& job) const;
+  absl::Status JobByName(const std::string& job_name,
+                         std::shared_ptr<const Job>& job) const;
 
   // Returns the next available iteration id.
   int64_t NextAvailableIterationId() const;
   // Returns a list of all iterations.
   std::vector<std::shared_ptr<const Iteration>> ListIterations() const;
   // Gets an iteration by id. Returns NOT_FOUND if there is no such iteration.
-  Status IterationFromId(int64_t id,
-                         std::shared_ptr<const Iteration>& iteration) const;
+  absl::Status IterationFromId(
+      int64_t id, std::shared_ptr<const Iteration>& iteration) const;
   // Gets an iteration by key. Returns NOT_FOUND if there is no such iteration.
-  Status IterationByKey(IterationKey key,
-                        std::shared_ptr<const Iteration>& iteration) const;
+  absl::Status IterationByKey(
+      IterationKey key, std::shared_ptr<const Iteration>& iteration) const;
 
   // Returns the iteration associated with the given iteration client id.
   // Returns NOT_FOUND if the iteration_client_id is unknown or has been
   // released.
-  Status IterationForIterationClientId(
+  absl::Status IterationForIterationClientId(
       int64_t iteration_client_id, std::shared_ptr<const Iteration>& iteration);
   // Returns a list of all active client ids.
   std::vector<int64_t> ListActiveClientIds();
@@ -275,25 +270,41 @@ class DispatcherState {
   // Returns the next available task id.
   int64_t NextAvailableTaskId() const;
   // Gets a task by id. Returns NOT_FOUND if there is no such task.
-  Status TaskFromId(int64_t id, std::shared_ptr<const Task>& task) const;
+  absl::Status TaskFromId(int64_t id, std::shared_ptr<const Task>& task) const;
   // Stores a list of all tasks for the given iteration to `tasks`. Returns
   // NOT_FOUND if there is no such iteration.
-  Status TasksForIteration(
+  absl::Status TasksForIteration(
       int64_t iteration_id,
       std::vector<std::shared_ptr<const Task>>& tasks) const;
   // Stores a list of all tasks for the given worker to `tasks`. Returns
   // NOT_FOUND if there is no such worker.
-  Status TasksForWorker(const absl::string_view worker_address,
-                        std::vector<std::shared_ptr<const Task>>& tasks) const;
+  absl::Status TasksForWorker(
+      const absl::string_view worker_address,
+      std::vector<std::shared_ptr<const Task>>& tasks) const;
 
   // If the dispatcher config explicitly specifies a list of workers, validates
   // `worker_address` is in the list.
-  Status ValidateWorker(absl::string_view worker_address) const;
+  absl::Status ValidateWorker(absl::string_view worker_address) const;
 
   // If the dispatcher config specifies worker addresses, `GetWorkerIndex`
   // returns the worker index according to the list. This is useful for
   // deterministically sharding a dataset among a fixed set of workers.
-  StatusOr<int64_t> GetWorkerIndex(absl::string_view worker_address) const;
+  absl::StatusOr<int64_t> GetWorkerIndex(
+      absl::string_view worker_address) const;
+
+  // Returns the paths of all snapshots initiated during the lifetime of this
+  // journal.
+  const absl::flat_hash_set<std::string>& ListSnapshotPaths() const {
+    return snapshot_paths_;
+  }
+
+  // Returns a bool describing whether or not compression was disabled at
+  // runtime for the given dataset, if such a decision has been made.
+  std::optional<bool> CompressionDisabledAtRuntime(
+      const std::string& dataset_id) const;
+
+  // Returns the current number of registered workers.
+  int64_t GetNumberOfRegisteredWorkers() const { return workers_.size(); }
 
  private:
   void RegisterDataset(const RegisterDatasetUpdate& register_dataset);
@@ -312,15 +323,16 @@ class DispatcherState {
   void ClientHeartbeat(const ClientHeartbeatUpdate& client_heartbeat);
   void CreateTask(const CreateTaskUpdate& create_task);
   void FinishTask(const FinishTaskUpdate& finish_task);
+  void Snapshot(const SnapshotUpdate& snapshot);
+  void CompressionDisabledAtRuntime(const CompressionDisabledAtRuntimeUpdate&
+                                        compression_disabled_at_runtime);
+
   // Updates the next available dataset ID.
   void UpdateNextAvailableDatasetId();
 
   int64_t next_available_dataset_id_ = 1000;
   // Registered datasets, keyed by dataset ids.
   absl::flat_hash_map<std::string, std::shared_ptr<Dataset>> datasets_by_id_;
-  // Registered datasets, keyed by dataset fingerprints.
-  absl::flat_hash_map<uint64, std::shared_ptr<Dataset>>
-      datasets_by_fingerprint_;
 
   // Registered workers, keyed by address.
   absl::flat_hash_map<std::string, std::shared_ptr<Worker>> workers_;
@@ -356,6 +368,11 @@ class DispatcherState {
   // Tasks, keyed by worker addresses. The values are a map from task id to
   // task.
   absl::flat_hash_map<std::string, TasksById> tasks_by_worker_;
+  // Paths for all snapshots initiated during the lifetime of this journal.
+  absl::flat_hash_set<std::string> snapshot_paths_;
+  // A mapping of dataset id to a boolean describing whether or not compression
+  // was disabled at runtime for that dataset.
+  absl::flat_hash_map<std::string, bool> compression_disabled_at_runtime_;
 };
 
 }  // namespace data

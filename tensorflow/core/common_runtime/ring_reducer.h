@@ -20,6 +20,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "absl/synchronization/notification.h"
 #include "tensorflow/core/common_runtime/base_collective_executor.h"
 #include "tensorflow/core/common_runtime/ring_alg.h"
 #include "tensorflow/core/framework/collective.h"
@@ -39,7 +40,8 @@ class RingReducer : public RingAlg {
   // collective threadpool.
   void Run(StatusCallback done) override;
 
-  Status InitializeCollectiveParams(CollectiveParams* col_params) override;
+  absl::Status InitializeCollectiveParams(
+      CollectiveParams* col_params) override;
 
  protected:
   void InitRingField(RingField* rf, int chunk_idx, int subdiv_idx,
@@ -50,7 +52,7 @@ class RingReducer : public RingAlg {
   bool RunAsyncParts();
 
   Tensor group_size_tensor_;
-  Notification group_size_tensor_ready_;
+  absl::Notification group_size_tensor_ready_;
 
   friend class RingReducerTest;
   friend class RingReducerInitParamsTest;

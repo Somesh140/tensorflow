@@ -29,19 +29,19 @@ limitations under the License.
 
 namespace tensorflow {
 
-Status FindNodeIndexByName(const tensorflow::GraphDef& graph,
-                           const string& node_name, int* node_idx) {
+absl::Status FindNodeIndexByName(const tensorflow::GraphDef& graph,
+                                 const string& node_name, int* node_idx) {
   for (int i = 0; i < graph.node_size(); ++i) {
     const auto& node = graph.node(i);
     if (node.name() == node_name) {
       *node_idx = i;
-      return OkStatus();
+      return absl::OkStatus();
     }
   }
   return errors::InvalidArgument(node_name, " not found in GraphDef");
 }
 
-Status ExtractExampleParserConfiguration(
+absl::Status ExtractExampleParserConfiguration(
     const tensorflow::GraphDef& graph, const string& node_name,
     tensorflow::Session* session,
     std::vector<FixedLenFeature>* fixed_len_features,
@@ -134,33 +134,33 @@ Status ExtractExampleParserConfiguration(
   int sparse_shapes_output_start = sparse_values_output_start + num_sparse;
   int dense_values_output_start = sparse_shapes_output_start + num_sparse;
 
-  string node_output_prefix = strings::StrCat(node_name, ":");
+  string node_output_prefix = absl::StrCat(node_name, ":");
 
   for (int i = 0; i < num_sparse; ++i) {
     VarLenFeature& config = (*var_len_features)[i];
 
     int indices_offset = sparse_indices_output_start + i;
     config.indices_output_tensor_name =
-        strings::StrCat(node_output_prefix, indices_offset);
+        absl::StrCat(node_output_prefix, indices_offset);
 
     int values_offset = sparse_values_output_start + i;
     config.values_output_tensor_name =
-        strings::StrCat(node_output_prefix, values_offset);
+        absl::StrCat(node_output_prefix, values_offset);
 
     int shapes_offset = sparse_shapes_output_start + i;
     config.shapes_output_tensor_name =
-        strings::StrCat(node_output_prefix, shapes_offset);
+        absl::StrCat(node_output_prefix, shapes_offset);
   }
 
   for (int i = 0; i < num_dense; ++i) {
     int output_idx = dense_values_output_start + i;
     (*fixed_len_features)[i].values_output_tensor_name =
-        strings::StrCat(node_output_prefix, output_idx);
+        absl::StrCat(node_output_prefix, output_idx);
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status ExampleParserConfigurationProtoToFeatureVectors(
+absl::Status ExampleParserConfigurationProtoToFeatureVectors(
     const ExampleParserConfiguration& config_proto,
     std::vector<FixedLenFeature>* fixed_len_features,
     std::vector<VarLenFeature>* var_len_features) {
@@ -195,7 +195,7 @@ Status ExampleParserConfigurationProtoToFeatureVectors(
       var_len_features->push_back(v);
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace tensorflow

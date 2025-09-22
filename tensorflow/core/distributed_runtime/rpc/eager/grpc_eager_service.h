@@ -17,6 +17,5 @@ limitations under the License.
 #define TENSORFLOW_CORE_DISTRIBUTED_RUNTIME_RPC_EAGER_GRPC_EAGER_SERVICE_H_
 
 #include "tensorflow/core/protobuf/eager_service.grpc.pb.h"
-#include "tensorflow/stream_executor/platform/port.h"
 
 #endif  // TENSORFLOW_CORE_DISTRIBUTED_RUNTIME_RPC_EAGER_GRPC_EAGER_SERVICE_H_

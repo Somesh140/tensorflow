@@ -18,6 +18,10 @@ from absl.testing import parameterized
 
 from tensorflow.core.protobuf.tpu import tpu_embedding_configuration_pb2
 from tensorflow.python.compat import v2_compat
+from tensorflow.python.eager import def_function
+from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import init_ops_v2
+from tensorflow.python.ops import math_ops
 from tensorflow.python.platform import test
 from tensorflow.python.tpu import tpu_embedding_v2_utils
 
@@ -74,6 +78,74 @@ class TPUEmbeddingOptimizerTest(parameterized.TestCase, test.TestCase):
     self.assertNotEqual(hash(opt1), hash(opt3))
 
 
+class TPUEmbeddingCustomCombinerTest(parameterized.TestCase, test.TestCase):
+
+  def get_sum_combiner(self):
+
+    @def_function.function
+    def sum_combiner(valency, vectors):
+      max_valency = vectors.shape[0]
+      valid_mask = array_ops.range(max_valency) < valency
+      vectors_masked = array_ops.where(
+          array_ops.expand_dims(valid_mask, axis=-1),
+          vectors,
+          array_ops.zeros_like(vectors),
+      )
+      return math_ops.reduce_sum(vectors_masked, axis=0)
+
+    return sum_combiner
+
+  def get_positional_weight_combiner(self):
+
+    @def_function.function
+    def positional_weight_combiner(valency, vectors, weights):
+      max_valency = vectors.shape[0]
+      valid_mask = array_ops.range(max_valency) < valency
+      vectors_masked = array_ops.where(
+          array_ops.expand_dims(valid_mask, axis=-1),
+          vectors,
+          array_ops.zeros_like(vectors),
+      )
+      return math_ops.matvec(vectors_masked, weights, transpose_a=True)
+
+    return positional_weight_combiner
+
+  def test_zero_num_weights_combiner_has_no_slots(self):
+    combiner = tpu_embedding_v2_utils.CustomCombiner(
+        self.get_sum_combiner(),
+        max_valency=16,
+        num_weights=0,
+    )
+    self.assertEmpty(combiner._slot_names())
+    self.assertEmpty(combiner._slot_initializers())
+
+  def test_name_starts_with_custom_combiner(self):
+    combiner = tpu_embedding_v2_utils.CustomCombiner(
+        self.get_sum_combiner(),
+        max_valency=16,
+    )
+    self.assertStartsWith(str(combiner), 'custom_combiner')
+
+  def test_non_zero_weights_requires_initializer(self):
+    with self.assertRaisesRegex(ValueError, '`initializer` must be set'):
+      tpu_embedding_v2_utils.CustomCombiner(
+          self.get_positional_weight_combiner(),
+          max_valency=16,
+          num_weights=16,
+      )
+
+  def test_non_zero_weights_has_one_slot_variable(self):
+    combiner = tpu_embedding_v2_utils.CustomCombiner(
+        self.get_positional_weight_combiner(),
+        max_valency=16,
+        num_weights=16,
+        initializer=init_ops_v2.zeros_initializer,
+    )
+    self.assertLen(combiner._slot_names(), 1)
+    self.assertLen(combiner._slot_initializers(), 1)
+    self.assertStartsWith(combiner._slot_names()[0], 'custom_combiner')
+
+
 class ConfigTest(test.TestCase):
 
   def test_table_config_repr(self):
@@ -84,7 +156,8 @@ class ConfigTest(test.TestCase):
     self.assertEqual(
         repr(table),
         'TableConfig(vocabulary_size=2, dim=4, initializer=None, '
-        'optimizer=None, combiner=\'sum\', name=\'table\')')
+        'optimizer=None, combiner=\'sum\', name=\'table\', '
+        'quantization_config=None)')
 
   def test_feature_config_repr(self):
     table = tpu_embedding_v2_utils.TableConfig(
@@ -92,14 +165,27 @@ class ConfigTest(test.TestCase):
         combiner='sum', name='table')
 
     feature_config = tpu_embedding_v2_utils.FeatureConfig(
-        table=table, name='feature')
+        table=table, output_shape=[16, 4], name='feature')
 
     self.assertEqual(
         repr(feature_config),
         'FeatureConfig(table=TableConfig(vocabulary_size=2, dim=4, '
-        'initializer=None, optimizer=None, combiner=\'sum\', name=\'table\'), '
-        'max_sequence_length=0, validate_weights_and_indices=True, '
+        'initializer=None, optimizer=None, combiner=\'sum\', '
+        'name=\'table\', quantization_config=None), max_sequence_length=0, '
+        'validate_weights_and_indices=True, output_shape=TensorShape([16, 4]), '
         'name=\'feature\')')
+
+  def test_quantization_config_num_buckets(self):
+    with self.assertRaisesRegex(ValueError, 'num_buckets'):
+      tpu_embedding_v2_utils.QuantizationConfig(0, -1, 1)
+
+  def test_quantization_config_repr(self):
+    quantization_config = tpu_embedding_v2_utils.QuantizationConfig(
+        num_buckets=10, lower=-1.0, upper=1.0)
+
+    self.assertEqual(
+        repr(quantization_config),
+        'QuantizationConfig(num_buckets=10, lower=-1.0, upper=1.0)')
 
 
 class TPUEmbeddingConfigurationTest(test.TestCase):
@@ -128,6 +214,22 @@ class TPUEmbeddingConfigurationTest(test.TestCase):
       self.assertLess(
           len(line), truncate_length,
           'Logging function lines should not be of truncating length.')
+
+
+class TPUEmbeddingUtilityFunctionTest(test.TestCase):
+
+  def test_sort_device_spec_strings(self):
+    device_spec_strings = []
+    for task in [2, 3, 0, 1]:  # Intentionally permuted
+      for device in range(8):
+        device_spec_strings.append(
+            f'/job:trainer/replica:0/task:{task}/device:TPU:{device}'
+        )
+    sorted_specs = tpu_embedding_v2_utils._sort_device_spec_strings(
+        device_spec_strings
+    )
+
+    self.assertEqual(sorted_specs, sorted(device_spec_strings))
 
 
 if __name__ == '__main__':

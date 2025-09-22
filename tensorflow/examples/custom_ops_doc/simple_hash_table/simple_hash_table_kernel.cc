@@ -13,13 +13,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_cat.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/op_requires.h"
+#include "tensorflow/core/framework/resource_base.h"
+#include "tensorflow/core/framework/resource_handle.h"
+#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/gtl/map_util.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/mutex.h"
+#include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/platform/strcat.h"
+#include "tensorflow/core/platform/tstring.h"
+#include "tensorflow/core/platform/types.h"
+#include "tsl/platform/thread_annotations.h"
 
 // Please use the appropriate namespace for your project
 namespace tensorflow {
@@ -112,16 +130,16 @@ class SimpleHashTableResource : public ::tensorflow::ResourceBase {
     mutex_lock l(mu_);
     for (const auto& pair : table_) {
       if (count >= num_pairs) {
-        strings::StrAppend(&rval, "...");
+        absl::StrAppend(&rval, "...");
         break;
       }
-      std::string kv_str = strings::StrCat(pair.first, ": ", pair.second);
-      strings::StrAppend(&rval, kv_str.substr(0, max_kv_str_len));
-      if (kv_str.length() > max_kv_str_len) strings::StrAppend(&rval, " ...");
-      strings::StrAppend(&rval, ", ");
+      std::string kv_str = absl::StrCat(pair.first, ": ", pair.second);
+      absl::StrAppend(&rval, kv_str.substr(0, max_kv_str_len));
+      if (kv_str.length() > max_kv_str_len) absl::StrAppend(&rval, " ...");
+      absl::StrAppend(&rval, ", ");
       count += 1;
     }
-    strings::StrAppend(&rval, "}");
+    absl::StrAppend(&rval, "}");
     return rval;
   }
 
@@ -150,7 +168,8 @@ class SimpleHashTableCreateOpKernel : public OpKernel {
 
  private:
   // Just to be safe, avoid accidentally copying the kernel.
-  TF_DISALLOW_COPY_AND_ASSIGN(SimpleHashTableCreateOpKernel);
+  SimpleHashTableCreateOpKernel(const SimpleHashTableCreateOpKernel&) = delete;
+  void operator=(const SimpleHashTableCreateOpKernel&) = delete;
 };
 
 // GetResource retrieves a Resource using a handle from the first

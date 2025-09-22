@@ -17,13 +17,17 @@ limitations under the License.
 #define TENSORFLOW_COMPILER_AOT_COMPILE_H_
 
 #include <memory>
-#include <string>
+#include <utility>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "tensorflow/compiler/aot/flags.h"
 #include "tensorflow/compiler/tf2xla/tf2xla.pb.h"
-#include "tensorflow/compiler/xla/service/cpu/cpu_compiler.h"
-#include "tensorflow/compiler/xla/xla_data.pb.h"
+#include "xla/service/cpu/cpu_aot_compilation_result.h"
+#include "xla/xla_data.pb.h"
 #include "tensorflow/core/framework/graph.pb.h"
+#include "tensorflow/core/platform/types.h"
+#include "tsl/platform/casts.h"
 
 namespace tensorflow {
 namespace tfcompile {
@@ -42,11 +46,12 @@ struct CompileResult {
 // that performs the graph operations.
 //
 // The XLA compilation options are specified in the flags.
-Status CompileGraph(GraphDef graph_def, const tf2xla::Config& config,
-                    const MainFlags& flags, CompileResult* compile_result);
+absl::Status CompileGraph(GraphDef graph_def, const tf2xla::Config& config,
+                          const MainFlags& flags,
+                          CompileResult* compile_result);
 
 // The full compilation method, for reuse in a library setting.
-Status Main(const MainFlags& flags);
+absl::Status Main(const MainFlags& flags);
 
 }  // namespace tfcompile
 }  // namespace tensorflow

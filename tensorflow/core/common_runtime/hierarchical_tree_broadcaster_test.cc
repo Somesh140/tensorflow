@@ -190,9 +190,8 @@ class HierarchicalTreeBroadcasterTest : public ::testing::Test {
     for (int di = 0; di < instances_.size(); ++di) {
       if (!instances_[di]->status_.ok()) {
         ASSERT_GT(fail_after, 0);
-        ASSERT_NE(
-            instances_[di]->status_.error_message().find("Deliberate failure"),
-            string::npos);
+        ASSERT_NE(instances_[di]->status_.message().find("Deliberate failure"),
+                  string::npos);
         ++failure_count_;
         continue;
       }
@@ -245,7 +244,7 @@ class HierarchicalTreeBroadcasterTest : public ::testing::Test {
     Tensor output_tensor_;
     Device* device_;
     core::RefCountPtr<CollectiveParams> col_params_;
-    Status status_;
+    absl::Status status_;
   };  // class DeviceInstance
 
   std::unique_ptr<CollectiveTestEnv> test_env_;

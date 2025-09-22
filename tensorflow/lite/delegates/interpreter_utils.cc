@@ -16,6 +16,13 @@ limitations under the License.
 #include "tensorflow/lite/delegates/interpreter_utils.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <vector>
+
+#include "tensorflow/lite/c/c_api_types.h"
+#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/core/api/error_reporter.h"
+#include "tensorflow/lite/interpreter.h"
 
 namespace tflite {
 namespace delegates {

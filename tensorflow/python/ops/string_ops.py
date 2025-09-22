@@ -14,7 +14,10 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Operations for working with string Tensors."""
+"""Operations for working with string Tensors.
+
+API docstring: tensorflow.strings
+"""
 
 import numpy as np
 
@@ -82,13 +85,13 @@ def regex_replace(input, pattern, rewrite, replace_global=True, name=None):
 
   Args:
     input: string `Tensor`, the source strings to process.
-    pattern: string or scalar string `Tensor`, regular expression to use,
-      see more details at https://github.com/google/re2/wiki/Syntax
+    pattern: string or scalar string `Tensor`, regular expression to use, see
+      more details at https://github.com/google/re2/wiki/Syntax
     rewrite: string or scalar string `Tensor`, value to use in match
-      replacement, supports backslash-escaped digits (\1 to \9) can be to insert
-      text matching corresponding parenthesized group.
-    replace_global: `bool`, if `True` replace all non-overlapping matches,
-      else replace only the first match.
+      replacement, supports backslash-escaped digits (\1 to \9) which can be to
+      insert text matching corresponding parenthesized group.
+    replace_global: `bool`, if `True` replace all non-overlapping matches, else
+      replace only the first match.
     name: A name for the operation (optional).
 
   Returns:
@@ -475,7 +478,7 @@ def string_to_number(input, out_type=dtypes.float32, name=None):
   Args:
     input: A `Tensor` of type `string`.
     out_type: An optional `tf.DType` from: `tf.float32, tf.float64, tf.int32,
-      tf.int64`. Defaults to `tf.float32`.
+      tf.int64, tf.uint32, tf.uint64`. Defaults to `tf.float32`.
       The numeric type to interpret each string in `string_tensor` as.
     name: A name for the operation (optional).
 

@@ -12,11 +12,18 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-#ifndef TENSORFLOW_CORE_TFRT_EXPERIMENTAL_RUN_HANDLER_THREAD_POOL_RUN_HANDLER_CONCURRENT_WORK_QUEUE_H_
-#define TENSORFLOW_CORE_TFRT_EXPERIMENTAL_RUN_HANDLER_THREAD_POOL_RUN_HANDLER_CONCURRENT_WORK_QUEUE_H_
+#ifndef TENSORFLOW_CORE_TFRT_RUN_HANDLER_THREAD_POOL_RUN_HANDLER_CONCURRENT_WORK_QUEUE_H_
+#define TENSORFLOW_CORE_TFRT_RUN_HANDLER_THREAD_POOL_RUN_HANDLER_CONCURRENT_WORK_QUEUE_H_
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <vector>
 
+#include "absl/status/statusor.h"
 #include "tensorflow/core/platform/strcat.h"
 #include "tensorflow/core/tfrt/run_handler_thread_pool/run_handler.h"
 #include "tensorflow/core/tfrt/runtime/work_queue_interface.h"
@@ -74,10 +81,13 @@ class RunHandlerThreadWorkQueue
 
     // If true, threads will be waken up by new tasks.
     bool enable_wake_up = true;
+
+    // If true, enables priority based queuing of requests.
+    bool enable_priority_based_queuing = false;
   };
 
   explicit RunHandlerThreadWorkQueue(const Options& options);
-  ~RunHandlerThreadWorkQueue() override {}
+  ~RunHandlerThreadWorkQueue() override = default;
 
   std::string name() const override {
     return tensorflow::strings::StrCat(
@@ -86,11 +96,8 @@ class RunHandlerThreadWorkQueue
         " complementary threads)");
   }
 
-  tensorflow::StatusOr<
-      std::unique_ptr<tensorflow::tfrt_stub::WorkQueueInterface>>
-  InitializeRequest(tfrt::RequestContextBuilder* request_context_builder,
-                    tensorflow::thread::ThreadPoolInterface**
-                        intra_op_threadpool) const override;
+  absl::StatusOr<std::unique_ptr<tensorflow::tfrt_stub::WorkQueueInterface>>
+  InitializeRequest(int64_t request_id, int priority) const override;
 
   int GetParallelismLevel() const override {
     return options_.num_main_threads + options_.num_complementary_threads;
@@ -98,8 +105,8 @@ class RunHandlerThreadWorkQueue
 
   void AddTask(TaskFunction work) override;
 
-  Optional<TaskFunction> AddBlockingTask(TaskFunction work,
-                                         bool allow_queuing) override;
+  std::optional<TaskFunction> AddBlockingTask(TaskFunction work,
+                                              bool allow_queuing) override;
 
   void Quiesce() override;
 
@@ -130,7 +137,9 @@ class RunHandlerThreadWorkQueue
       blocking_work_queue_;
 };
 
+std::ostream& operator<<(std::ostream& strm,
+                         const RunHandlerThreadWorkQueue::Options& options);
 }  // namespace tf
 }  // namespace tfrt
 
-#endif  // TENSORFLOW_CORE_TFRT_EXPERIMENTAL_RUN_HANDLER_THREAD_POOL_RUN_HANDLER_CONCURRENT_WORK_QUEUE_H_
+#endif  // TENSORFLOW_CORE_TFRT_RUN_HANDLER_THREAD_POOL_RUN_HANDLER_CONCURRENT_WORK_QUEUE_H_

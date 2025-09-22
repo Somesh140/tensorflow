@@ -1,5 +1,8 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 # Library for generating feature vectors from audio data
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = ["//visibility:public"],
     licenses = ["notice"],
 )

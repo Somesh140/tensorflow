@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/c/c_api_experimental.h"
 
 #include "absl/strings/substitute.h"
+#include "absl/synchronization/notification.h"
 #include "tensorflow/c/c_api.h"
 #include "tensorflow/c/c_api_internal.h"
 #include "tensorflow/c/checkpoint_reader.h"
@@ -24,6 +25,7 @@ limitations under the License.
 #include "tensorflow/c/eager/tfe_context_internal.h"
 #include "tensorflow/c/eager/tfe_op_internal.h"
 #include "tensorflow/c/eager/tfe_tensorhandle_internal.h"
+#include "tensorflow/c/tf_buffer_internal.h"
 #include "tensorflow/compiler/jit/flags.h"
 #include "tensorflow/core/common_runtime/eager/attr_builder.h"
 #include "tensorflow/core/common_runtime/eager/context.h"
@@ -189,7 +191,7 @@ const char* TF_GraphDebugString(TF_Graph* graph, size_t* len) {
 }
 
 char* TF_FunctionDebugString(TF_Function* func, size_t* len) {
-  const auto& debug_str = DebugString(func->fdef);
+  const auto& debug_str = DebugString(func->record->fdef());
   *len = debug_str.size();
   char* ret = static_cast<char*>(malloc(*len + 1));
   memcpy(ret, debug_str.c_str(), *len + 1);
@@ -331,7 +333,7 @@ TF_Buffer* TFE_GetServerDef(const char* text_proto, TF_Status* status) {
         "Invalid text proto for ServerDef: ", text_proto);
     return nullptr;
   }
-  status->status = tensorflow::Status();
+  status->status = absl::Status();
   TF_Buffer* ret = TF_NewBuffer();
   TF_CHECK_OK(MessageToBuffer(server_def, ret));
   return ret;
@@ -500,7 +502,7 @@ TFE_TensorHandle* TFE_NewTensorHandleFromScalar(TF_DataType data_type,
   tensorflow::Tensor tensor(dtype, tensorflow::TensorShape({}));
   std::memcpy(tensorflow::TensorCApi::Buffer(tensor)->data(), data, len);
 
-  status->status = ::tensorflow::OkStatus();
+  status->status = absl::OkStatus();
   return tensorflow::wrap(tensorflow::TensorHandle::CreateLocalHandle(tensor));
 }
 
@@ -532,7 +534,7 @@ TF_CAPI_EXPORT extern void TFE_CollectiveOpsCheckPeerHealth(
   tensorflow::EagerContext* context =
       tensorflow::ContextFromInterface(tensorflow::unwrap(ctx));
   auto collective_executor_handle = context->GetCollectiveExecutorHandle();
-  tensorflow::Notification done;
+  absl::Notification done;
   collective_executor_handle->get()->remote_access()->CheckPeerHealth(
       task, timeout_in_ms, [&done, status](const Status& s) {
         status->status = s;
@@ -594,10 +596,11 @@ void TF_DeleteShapeAndTypeListArray(TF_ShapeAndTypeList** shape_list_array,
 }
 
 namespace tensorflow {
-Status TF_TensorToTensor(const TF_Tensor* src, Tensor* dst);
+absl::Status TF_TensorToTensor(const TF_Tensor* src, Tensor* dst);
 
 // Helpers for loadding a TensorFlow PluggableDevice plugin (a .so file).
-Status LoadPluggableDeviceLibrary(const char* library_filename, void** result);
+absl::Status LoadPluggableDeviceLibrary(const char* library_filename,
+                                        void** result);
 }  // namespace tensorflow
 
 void TFE_InferShapes(TFE_Op* tfe_op, TF_ShapeAndTypeList* input_shapes,
@@ -756,4 +759,10 @@ TF_Library* TF_LoadPluggableDeviceLibrary(const char* library_filename,
 
 void TF_DeletePluggableDeviceLibraryHandle(TF_Library* lib_handle) {
   delete lib_handle;
+}
+
+void TF_GraphRemoveFunction(TF_Graph* g, const char* func_name,
+                            TF_Status* status) {
+  tensorflow::mutex_lock l(g->mu);
+  status->status = g->graph.mutable_flib_def()->RemoveFunction(func_name);
 }

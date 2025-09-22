@@ -23,6 +23,7 @@ import collections
 
 from tensorflow.core.framework import types_pb2
 from tensorflow.python.eager import backprop_util
+from tensorflow.python.eager import context
 from tensorflow.python.framework import auto_control_deps
 from tensorflow.python.framework import auto_control_deps_utils as acd
 from tensorflow.python.framework import constant_op
@@ -30,7 +31,9 @@ from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import errors_impl
 from tensorflow.python.framework import func_graph as func_graph_module
 from tensorflow.python.framework import indexed_slices
+from tensorflow.python.framework import none_tensor  # pylint: disable=unused-import
 from tensorflow.python.framework import ops
+from tensorflow.python.framework import tensor as tensor_lib
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.framework import type_spec
@@ -38,8 +41,8 @@ from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_util
 from tensorflow.python.ops import control_flow_util_v2 as util
 from tensorflow.python.ops import default_gradient
-from tensorflow.python.ops import gen_dataset_ops
 from tensorflow.python.ops import gen_functional_ops
+from tensorflow.python.ops import gen_optional_ops
 from tensorflow.python.ops import gradients_util
 from tensorflow.python.ops import handle_data_util
 from tensorflow.python.ops import math_ops
@@ -57,6 +60,16 @@ _COND = 1
 _CASE = 2
 
 
+def _normalize_pred(pred):
+  """Normalize the predicate to a scalar tensor."""
+  pred = ops.convert_to_tensor(pred)
+  if tensor_util.is_tf_type(pred) and (
+      pred.shape.dims is None or pred.shape.dims
+  ):
+    pred = array_ops.squeeze_v2(pred)
+  return pred
+
+
 def cond_v2(pred, true_fn, false_fn, name="cond"):
   """Like tf.cond, except emits a single If op."""
   if isinstance(pred, bool):
@@ -72,10 +85,7 @@ def cond_v2(pred, true_fn, false_fn, name="cond"):
     # Automatic control dependencies are added in defuns, but not in v1
     # graphs. Propagate that behavior here.
     add_control_dependencies = ops.get_default_graph()._add_control_dependencies
-    pred = ops.convert_to_tensor(pred)
-    if (tensor_util.is_tf_type(pred) and
-        (pred.shape.dims is None or pred.shape.dims)):
-      pred = array_ops.squeeze_v2(pred)
+    pred = _normalize_pred(pred)
 
     true_graph = func_graph_module.func_graph_from_py_func(
         true_name,
@@ -100,7 +110,82 @@ def cond_v2(pred, true_fn, false_fn, name="cond"):
         true_graph.external_captures,
         false_graph.external_captures,
         building_gradient=False,
-        name=scope)
+        name=scope,
+    )
+
+
+def fast_cond_v2(pred, true_fn, false_fn, name=None):
+  """Like cond_v2, except emits an If op and applies various optimizations.
+
+  This function is intended to be used for cases where the cond is used to
+  implement a simple conditional control flow operator. It makes the following
+  assumptions:
+
+  1. The conditional is never differentiated.
+  2. The caller does not rely on V1 control flow semantics, i.e. for cross
+     device execution, pruning subgraphs of the true or false branches, or
+     non-strict evaluation order.
+  3. The caller manually configures any control dependencies within the graphs.
+
+  In this case, the cond will be lowered to a single If (or StatelessIf) op and
+  the true and false graphs will be executed as TF functions.
+
+  Args:
+    pred: boolean Tensor
+    true_fn: function to execute if pred is true
+    false_fn: function to execute if pred is false
+    name: the name for the If op.
+    
+  Returns:
+    A list of Tensors which are the outputs of the If op. Does not include 
+    intermediate outputs.
+  """
+  if isinstance(pred, bool):
+    raise TypeError("pred must not be a Python bool", pred)
+
+  if not name:
+    name = "fast_cond"
+
+  with ops.name_scope(name) as scope:
+    true_name = util.unique_fn_name(scope, "true")
+    false_name = util.unique_fn_name(scope, "false")
+    pred = _normalize_pred(pred)
+
+    true_graph = func_graph_module.func_graph_from_py_func(
+        true_name,
+        true_fn,
+        [],
+        {},
+        func_graph=util.CondBranchFuncGraph(
+            true_name, collections=ops.get_default_graph()._collections
+        ),  # pylint: disable=protected-access
+        add_control_dependencies=False,
+        op_return_value=pred,
+    )
+    false_graph = func_graph_module.func_graph_from_py_func(
+        false_name,
+        false_fn,
+        [],
+        {},
+        func_graph=util.CondBranchFuncGraph(
+            false_name, collections=ops.get_default_graph()._collections
+        ),  # pylint: disable=protected-access
+        add_control_dependencies=False,
+        op_return_value=pred,
+    )
+
+    verify_captures(_COND, [true_graph, false_graph])
+    return _build_cond(
+        pred,
+        true_graph,
+        false_graph,
+        true_graph.external_captures,
+        false_graph.external_captures,
+        building_gradient=False,
+        add_identities=False,
+        prevent_lowering=True,
+        name=scope,
+    )
 
 
 @ops.RegisterGradient("StatelessIf")
@@ -136,7 +221,10 @@ def _IfGrad(op, *grads):  # pylint: disable=invalid-name
     # NOTE(skyewm): if there are any active sessions, this modification to `op`
     # may make them unrunnable!
 
-    if control_flow_util.GraphOrParentsInXlaContext(ops.get_default_graph()):
+    if (
+        not context.optionals_in_gradients_enabled()
+        or control_flow_util.GraphOrParentsInXlaContext(ops.get_default_graph())
+    ):
       # XLA does not yet support optionals, so output intermediates directly and
       # make them match via FakeParams, which can be converted to zeros in XLA.
       # TODO(skyewm,jpienaar): can XLA support optionals?
@@ -190,13 +278,45 @@ def _IfGrad(op, *grads):  # pylint: disable=invalid-name
   return [None] + outputs
 
 
-def _build_cond(pred,
-                true_graph,
-                false_graph,
-                true_inputs,
-                false_inputs,
-                building_gradient,
-                name=None):
+def _is_op_stateful(op):
+  """Check whether an op is stateful.
+
+  This helper function handles two special cases to make the stateful analysis
+  consistent with the mlir side effect analysis.
+  1. GlobalIterIdOp should be stateless.
+  2. CollectiveGatherV2 with attribute is_stateless to be True should be
+     stateless.
+
+  Args:
+   op: Operation
+
+  Returns:
+    Boolean indicates whether the operation is stateless or not.
+  """
+  # TODO(pineapplejuice233): Remove these hardcode op names once they can be marked as
+  # stateless in TF.
+  if op.type == "GlobalIterId":
+    return False
+  if op.type == "UpdateFdoWithGlobalMinibatchStatistics":
+    return False
+  if op.type == "CollectiveGatherV2" and op.get_attr("is_stateless"):
+    return False
+  if op.type == "CollectiveAllToAllV2" and op.get_attr("is_stateless"):
+    return False
+  return op._is_stateful
+
+
+def _build_cond(
+    pred,
+    true_graph,
+    false_graph,
+    true_inputs,
+    false_inputs,
+    building_gradient,
+    add_identities: bool = True,
+    prevent_lowering: bool = False,
+    name=None,
+):
   """Creates an If op from the specified predicate, branch functions and inputs.
 
   Note that this modifies true_graph and false_graph to make the inputs match,
@@ -213,6 +333,12 @@ def _build_cond(pred,
     true_inputs: a list of Tensors to be passed to true_graph as input.
     false_inputs: a list of Tensors to be passed to false_graph as input.
     building_gradient: Whether this is a gradient If op.
+    add_identities: If `True`, adds an identity op for each output of the If op.
+      This is useful for pruning, but can be disabled if the caller does not
+      want to rely on pruning and wants to avoid the overhead of extra identity
+      ops in the graph.
+    prevent_lowering: If `True`, prevents the If op from being lowered to
+      V1 `Switch` and `Merge` ops.
     name: the name for the If op.
 
   Returns:
@@ -254,12 +380,17 @@ def _build_cond(pred,
 
   # Create the If op.
   with ops.control_dependencies(
-      list(true_graph.control_captures) + list(false_graph.control_captures)):
+      list(true_graph.function_captures.control) + list(
+          false_graph.function_captures.control)):
     true_stateful_ops = [
-        op for op in true_graph.get_operations() if op._is_stateful
+        op
+        for op in true_graph.get_operations()
+        if _is_op_stateful(op)
     ]
     false_stateful_ops = [
-        op for op in false_graph.get_operations() if op._is_stateful
+        op
+        for op in false_graph.get_operations()
+        if _is_op_stateful(op)
     ]
     if (true_stateful_ops or false_stateful_ops):
       op_fn = gen_functional_ops._if
@@ -276,6 +407,7 @@ def _build_cond(pred,
                                            false_graph.outputs),
           name=name))
       _copy_handle_data(tensors, true_graph.outputs, false_graph.outputs)
+
       # `if_op` is None if this is a `StatelessIf` op with no outputs.
       if if_op is not None:
         # The true and false graphs have already been created, and we need that
@@ -287,11 +419,12 @@ def _build_cond(pred,
         false_graph.outer_graph = ops.get_default_graph()
         if_op._true_graph = true_graph
         if_op._false_graph = false_graph
-        util.maybe_set_lowering_attr(if_op)
+        util.maybe_set_lowering_attr(if_op, False if prevent_lowering else None)
         util.maybe_propagate_compile_time_consts_in_xla(if_op)
         _set_read_only_resource_inputs_attr(if_op, [true_graph, false_graph])
         # Prevent fetching since the variant outputs can't be fetched directly.
-        if_op.graph.prevent_fetching(if_op)
+        if not prevent_lowering:
+          if_op.graph.prevent_fetching(if_op)
       return tensors
     tensors = util.run_as_function_for_tape_gradients(_make_op, cond_inputs)
 
@@ -300,10 +433,13 @@ def _build_cond(pred,
   # fetched: the lowering pass converts the If outputs into IdentityN outputs,
   # which if fetched will cause all ops in the taken branch to be run (since
   # it takes all merge ops as input). After lowering, each output identity op
-  # will end up with only the appropriate merge op as input.
+  # will end up with only the appropriate merge op as input. This can be
+  # disabled (via `fast_cond_v2()`) if the caller does not want to rely on
+  # pruning and wants to avoid the overhead of extra identity ops in the graph.
   # TODO(b/79984175): this doesn't have to be a tuple once we covert to the
   # correct output structure
-  tensors = [array_ops.identity(t) for t in tensors]
+  if add_identities:
+    tensors = [array_ops.identity(t) for t in tensors]
 
   structured_output_specs = _get_compatible_structured_output_specs(true_graph,
                                                                     false_graph)
@@ -332,7 +468,7 @@ def get_func_graphs(op):
       func_graph = util.get_func_graph(op, input_shapes, name_attr_list.name)
     for external_t, internal_t in zip(inputs, func_graph.inputs):
       handle_data_util.copy_handle_data(external_t, internal_t)
-    func_graph.reset_captures(zip(inputs, func_graph.inputs))
+    func_graph.function_captures.reset_captures(inputs, func_graph.inputs)
     # Link the op so that the gradient code can use it.
     func_graph._forward_cond = op
     return func_graph
@@ -583,7 +719,8 @@ def _make_inputs_match(branch_graphs, branch_inputs):
     branch_graph.inputs = input_list
 
     # Rewrite the FuncGraphs' state to reflect the new inputs.
-    branch_graph.reset_captures(zip(new_inputs, branch_graph.inputs))
+    branch_graph.function_captures.reset_captures(
+        new_inputs, branch_graph.inputs)
 
   return new_inputs
 
@@ -648,7 +785,7 @@ def _make_output_composite_tensors_match(op_type, branch_graphs):
     for branch_idx, branch_out in enumerate(branch_outs):
       if isinstance(branch_out, indexed_slices.IndexedSlices):
         continue
-      elif isinstance(branch_out, ops.Tensor):
+      elif isinstance(branch_out, tensor_lib.Tensor):
         with branch_graphs[branch_idx].as_default():
           branch_outputs[branch_idx][output_idx] = math_ops._as_indexed_slices(
               branch_out)
@@ -763,7 +900,7 @@ def _pack_sequence_as(structured_outputs, op_outputs):
 
 def _wrap_intermediates(func_graph, intermediates):
   with func_graph.as_default():
-    return [gen_dataset_ops.optional_from_value([t]) for t in intermediates]
+    return [gen_optional_ops.optional_from_value([t]) for t in intermediates]
 
 
 def _create_dummy_input(func_graph, template_tensor):
@@ -792,14 +929,45 @@ def _create_none_optionals(func_graph, n):
     A list of tensors in func_graph.
   """
   with func_graph.as_default():
-    return [gen_dataset_ops.optional_none() for _ in range(n)]
+    return [gen_optional_ops.optional_none() for _ in range(n)]
+
+
+# TODO(b/265317139): remove this function and move this dynamic dimension
+# handling logic to XLA once XLA shape is ready for dynamic dimensions.
+def _convert_dynamic_dimension_to_zero(shape):
+  """Converts dynamic dimensions in `shape` to zero.
+
+  The fake params created to match the intermediates captured in other branches
+  could have dynamic dimensions. But the XLA shape is not able to handle
+  dynamic dimensions in TF TensorShape. Setting the dynamic dimensions to
+  size zero will help avoid failing safety checks in bridge. When XLA
+  DynamicConditional op reconciles branch differences, XLA will replace the
+  dimension size 0 with a bounded dimension determined from the shape of
+  real argument in the other branch.
+
+  Note: Rank unknown shapes are returned as they are.
+
+  Args:
+    shape: The TensorShape of fake param.
+
+  Returns:
+    The new TensorShape with dynamic dimensions set to zero.
+  """
+  if shape.rank is None:
+    return shape
+
+  return tensor_shape.TensorShape(
+      [0 if d is None else d for d in shape.as_list()]
+  )
 
 
 def _create_fakeparams(func_graph, template_tensors):
-  """Create FakeParams for the XLA case."""
+  """Creates FakeParams for the XLA case."""
   with func_graph.as_default():
-    return [gen_functional_ops.fake_param(dtype=t.dtype, shape=t.shape)
-            for t in template_tensors]
+    return [
+        gen_functional_ops.fake_param(
+            dtype=t.dtype, shape=_convert_dynamic_dimension_to_zero(t.shape))
+        for t in template_tensors]
 
 
 def _check_same_outputs(op_type, graphs):
@@ -965,7 +1133,10 @@ class _CondGradFuncGraph(util.CondBranchFuncGraph):
           tensor_util.constant_value(tensor), dtype=tensor.dtype)
       return self._captured_constants[tensor_id]
 
-    if control_flow_util.GraphOrParentsInXlaContext(ops.get_default_graph()):
+    if (
+        not context.optionals_in_gradients_enabled()
+        or control_flow_util.GraphOrParentsInXlaContext(ops.get_default_graph())
+    ):
       # XLA does not yet support optionals, so capture intermediates directly.
       # TODO(skyewm,jpienaar): can XLA support optionals?
       if all(tensor is not capture for capture in self.external_captures):
@@ -1007,15 +1178,16 @@ class _CondGradFuncGraph(util.CondBranchFuncGraph):
         else:
           # 'tensor' hasn't been wrapped, do it now.
           with self._forward_graph.as_default():
-            optional = gen_dataset_ops.optional_from_value([tensor])
+            optional = gen_optional_ops.optional_from_value([tensor])
           self.op_needs_rewrite = True
         self._wrapped_intermediates[tensor_id] = optional
 
       optional = self._wrapped_intermediates[tensor_id]
       captured_optional = super(_CondGradFuncGraph,
                                 self)._capture_helper(optional, name)
-      captured_tensor = gen_dataset_ops.optional_get_value(
-          captured_optional, [tensor.dtype], [tensor.shape])[0]
+      captured_tensor = gen_optional_ops.optional_get_value(
+          captured_optional, [tensor.dtype], [tensor.shape]
+      )[0]
 
     self._indirect_captures[tensor_id] = captured_tensor
     return captured_tensor
@@ -1095,7 +1267,10 @@ def _CaseGrad(op, *grads):  # pylint: disable=invalid-name
     # NOTE(bjp): if there are any active sessions, this modification to `op`
     # may make them unrunnable!
 
-    if control_flow_util.GraphOrParentsInXlaContext(ops.get_default_graph()):
+    if (
+        not context.optionals_in_gradients_enabled()
+        or control_flow_util.GraphOrParentsInXlaContext(ops.get_default_graph())
+    ):
       # XLA does not yet support optionals, so output intermediates directly and
       # make them match via FakeParams, which can be converted to zeros in XLA.
       # TODO(bjp,jpienaar): can XLA support optionals?
@@ -1203,7 +1378,7 @@ def _build_case(branch_index,
 
   # Create the Case op.
   with ops.control_dependencies(
-      sum((list(bg.control_captures) for bg in branch_graphs), [])):
+      sum((list(bg.function_captures.control) for bg in branch_graphs), [])):
 
     def _make_op(inputs):
       case_op, tensors = util.get_op_and_outputs(op_fn(

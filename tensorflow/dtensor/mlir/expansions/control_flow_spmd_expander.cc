@@ -15,6 +15,22 @@ limitations under the License.
 
 #include "tensorflow/dtensor/mlir/expansions/control_flow_spmd_expander.h"
 
+#include <cassert>
+
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/Casting.h"
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/dtensor/cc/dstatus.h"
+#include "tensorflow/dtensor/cc/tensor_layout.h"
+#include "tensorflow/dtensor/mlir/ir/tf_dtensor.h"
+#include "tensorflow/dtensor/mlir/layout_parsing.h"
+#include "tensorflow/dtensor/mlir/value_utils.h"
+
 namespace tensorflow {
 namespace dtensor {
 
@@ -33,8 +49,8 @@ StatusOr<mlir::Operation*> WhileRegionSPMDExpander::ExpandOp(
 
   auto while_op = llvm::cast<mlir::TF::WhileRegionOp>(op);
   for (const auto& data :
-       llvm::enumerate(llvm::zip(while_op.cond().front().getArguments(),
-                                 while_op.body().front().getArguments()))) {
+       llvm::enumerate(llvm::zip(while_op.getCond().front().getArguments(),
+                                 while_op.getBody().front().getArguments()))) {
     const int index = data.index();
     mlir::BlockArgument cond_arg = std::get<0>(data.value());
     mlir::BlockArgument body_arg = std::get<1>(data.value());
@@ -70,16 +86,16 @@ StatusOr<mlir::Operation*> IfRegionSPMDExpander::ExpandOp(mlir::Operation* op) {
       return errors::InvalidArgument(
           "Missing layout of If op result during SPMD expansion.");
 
-    const Layout layout = result_layout_op.layout();
+    const Layout layout = result_layout_op.getLayout();
     if (!layout.IsFullyReplicated()) {
-      const auto global_shape = result_layout_op.global_shape();
+      const auto global_shape = result_layout_op.getGlobalShape();
       if (!global_shape)
         return errors::InvalidArgument(
             "Shape of If op must be statically known for SPMD expansion.");
 
       result.setType(mlir::RankedTensorType::get(
           layout.LocalShapeFromGlobalShape(*global_shape),
-          result.getType().cast<mlir::TensorType>().getElementType()));
+          mlir::cast<mlir::TensorType>(result.getType()).getElementType()));
     }
   }
   return op;

@@ -20,17 +20,21 @@ limitations under the License.
 
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/IR/SymbolTable.h"  // from @llvm-project
+#include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
+#include "tensorflow/core/ir/dialect.h"
 #include "tensorflow/core/transforms/functional_to_region/impl.h"
-#include "tensorflow/core/transforms/pass_detail.h"
 
 namespace mlir {
 namespace tfg {
-
 namespace {
+
+#define GEN_PASS_DEF_FUNCTIONALTOREGION
+#include "tensorflow/core/transforms/passes.h.inc"
+
 struct FunctionalToRegionPass
-    : public FunctionalToRegionBase<FunctionalToRegionPass> {
+    : public impl::FunctionalToRegionBase<FunctionalToRegionPass> {
   void runOnOperation() override {
     SymbolTable table(getOperation());
     RewritePatternSet patterns(&getContext());
@@ -39,14 +43,15 @@ struct FunctionalToRegionPass
     GreedyRewriteConfig config;
     // Use top-down traversal for more efficient conversion. Disable region
     // simplification as all regions are single block.
-    config.useTopDownTraversal = true;
-    config.enableRegionSimplification = false;
+    config.setUseTopDownTraversal(true);
+    config.setRegionSimplificationLevel(
+        mlir::GreedySimplifyRegionLevel::Disabled);
     // If there are deeply nested conditionals, instantiating them too deep will
     // cause the verifiers, which are implemented recursively, to stack
     // overflow. Set a relatively low iteration limit.
-    config.maxIterations = 16;
-    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns),
-                                            config)))
+    config.setMaxIterations(16);
+    if (failed(
+            applyPatternsGreedily(getOperation(), std::move(patterns), config)))
       signalPassFailure();
   }
 };

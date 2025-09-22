@@ -16,11 +16,12 @@ limitations under the License.
 #define TENSORFLOW_CORE_DATA_UNBOUNDED_THREAD_POOL_H_
 
 #include <deque>
+#include <functional>
 #include <memory>
 #include <vector>
 
+#include "absl/synchronization/notification.h"
 #include "tensorflow/core/framework/thread_factory.h"
-#include "tensorflow/core/lib/core/notification.h"
 #include "tensorflow/core/lib/core/threadpool_interface.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/unbounded_work_queue.h"
@@ -54,7 +55,7 @@ class UnboundedThreadPool : public thread::ThreadPoolInterface {
   class LogicalThreadWrapper;
 
   void ScheduleOnWorkQueue(std::function<void()> fn,
-                           std::shared_ptr<Notification> done);
+                           std::shared_ptr<absl::Notification> done);
 
   UnboundedWorkQueue unbounded_work_queue_;
 };
