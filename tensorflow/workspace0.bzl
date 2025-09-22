@@ -1,14 +1,14 @@
 """TensorFlow workspace initialization. Consult the WORKSPACE on how to use it."""
 
-load("//third_party/googleapis:repository_rules.bzl", "config_googleapis")
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_toolchains//repositories:repositories.bzl", bazel_toolchains_repositories = "repositories")
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@build_bazel_apple_support//lib:repositories.bzl", "apple_support_dependencies")
 load("@build_bazel_rules_apple//apple:repositories.bzl", "apple_rules_dependencies")
 load("@build_bazel_rules_swift//swift:repositories.bzl", "swift_rules_dependencies")
-load("@build_bazel_apple_support//lib:repositories.bzl", "apple_support_dependencies")
 load("@com_github_grpc_grpc//bazel:grpc_extra_deps.bzl", "grpc_extra_deps")
 load("@local_config_android//:android.bzl", "android_workspace")
-load("@rules_cc//cc:repositories.bzl", "rules_cc_toolchains")
+load("@rules_foreign_cc//foreign_cc:repositories.bzl", "rules_foreign_cc_dependencies")
+load("//third_party/googleapis:repository_rules.bzl", "config_googleapis")
 
 def _tf_bind():
     """Bind targets for some external repositories"""
@@ -42,7 +42,7 @@ def _tf_bind():
     # Needed by Protobuf
     native.bind(
         name = "python_headers",
-        actual = str(Label("//third_party/python_runtime:headers")),
+        actual = str(Label("@local_xla//third_party/python_runtime:headers")),
     )
 
     # Needed by Protobuf
@@ -105,12 +105,10 @@ def workspace():
         ],
     )
 
-    rules_cc_toolchains()
-
     bazel_toolchains_repositories()
 
     # Apple rules for Bazel. https://github.com/bazelbuild/rules_apple.
-    # TODO(mihaimaruseac): We add this to fix Kokoro builds.
+    # Note: We add this to fix Kokoro builds.
     # The rules below call into `rules_proto` but the hash has changed and
     # Bazel refuses to continue. So, we add our own mirror.
     http_archive(
@@ -135,7 +133,19 @@ def workspace():
     _tf_bind()
 
     grpc_extra_deps()
+    rules_foreign_cc_dependencies()
     config_googleapis()
+
+    # Toolchains for ML projects hermetic builds.
+    # Details: https://github.com/google-ml-infra/rules_ml_toolchain
+    http_archive(
+        name = "rules_ml_toolchain",
+        sha256 = "59d7eb36a02cbe3c2e2fa67fda5e8f1ab7e274bc4773bbd207c51fe199e11c19",
+        strip_prefix = "rules_ml_toolchain-ffd9e3d7b84e43c2686c803cb08ce790ffd58baa",
+        urls = [
+            "https://github.com/google-ml-infra/rules_ml_toolchain/archive/ffd9e3d7b84e43c2686c803cb08ce790ffd58baa.tar.gz",
+        ],
+    )
 
 # Alias so it can be loaded without assigning to a different symbol to prevent
 # shadowing previous loads and trigger a buildifier warning.

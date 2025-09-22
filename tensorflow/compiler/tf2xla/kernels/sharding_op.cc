@@ -13,13 +13,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "tensorflow/compiler/tf2xla/shape_util.h"
-#include "tensorflow/compiler/tf2xla/xla_helpers.h"
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+#include "tensorflow/compiler/tf2xla/sharding_util.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "tensorflow/compiler/xla/client/xla_builder.h"
-#include "tensorflow/compiler/xla/sharding_op_util.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/sharding_op_util.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/op_requires.h"
 
 namespace tensorflow {
 namespace {
@@ -42,22 +46,27 @@ class ShardingOp : public XlaOpKernel {
       // The builder might create a broadcast from a constant, so we clear
       // sharding for the input.
       xla::XlaScopedShardingAssignment no_sharding(ctx->builder(),
-                                                   absl::nullopt);
+                                                   std::nullopt);
       input = ctx->Input(0);
     }
     auto shape_or = ctx->builder()->GetShape(input);
     OP_REQUIRES_OK(ctx, shape_or.status());
 
-    ctx->SetOutput(
-        0, xla::CustomCall(
-               ctx->builder(), /*call_target_name=*/"Sharding", {input},
-               shape_or.ValueOrDie(),
-               /*opaque=*/
-               xla::sharding_op_util::EncodeAttributes(unspecified_dims_)));
+    xla::XlaOp output = xla::CustomCall(
+        ctx->builder(), /*call_target_name=*/"Sharding", {input},
+        shape_or.value(),
+        /*opaque=*/
+        xla::sharding_op_util::EncodeAttributes(unspecified_dims_));
+    if (ctx->compiler()->options().use_shardy_partitioner) {
+      OP_REQUIRES_OK(ctx, addSdyShardingFrontendAttribute(
+                              ctx->builder(), output, shape_or.value()));
+    }
+    ctx->SetOutput(0, output);
   }
 
  private:
-  TF_DISALLOW_COPY_AND_ASSIGN(ShardingOp);
+  ShardingOp(const ShardingOp&) = delete;
+  void operator=(const ShardingOp&) = delete;
   std::vector<int64_t> unspecified_dims_;
 };
 

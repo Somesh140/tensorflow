@@ -15,7 +15,7 @@ limitations under the License.
 
 #include "tensorflow/core/grappler/clusters/utils.h"
 
-#include "third_party/eigen3/Eigen/Core"
+#include "Eigen/Core"  // from @eigen_archive
 
 #if GOOGLE_CUDA
 #include "third_party/gpus/cuda/include/cuda.h"
@@ -25,10 +25,6 @@ limitations under the License.
 
 #if TENSORFLOW_USE_ROCM
 #include "rocm/include/hip/hip_runtime.h"
-#endif
-
-#ifdef TENSORFLOW_USE_LIBXSMM
-#include "include/libxsmm.h"
 #endif
 
 #include "tensorflow/core/common_runtime/gpu/gpu_id.h"
@@ -50,7 +46,7 @@ DeviceProperties GetLocalCPUInfo() {
   device.set_vendor(port::CPUVendorIDString());
   // Combine cpu family and model into the model string.
   device.set_model(
-      strings::StrCat((port::CPUFamily() << 4) + port::CPUModelNum()));
+      absl::StrCat((port::CPUFamily() << 4) + port::CPUModelNum()));
   device.set_frequency(port::NominalCPUFrequency() * 1e-6);
   device.set_num_cores(port::NumSchedulableCPUs());
   device.set_l1_cache_size(Eigen::l1CacheSize());
@@ -67,9 +63,6 @@ DeviceProperties GetLocalCPUInfo() {
 
   (*device.mutable_environment())["eigen"] = strings::StrCat(
       EIGEN_WORLD_VERSION, ".", EIGEN_MAJOR_VERSION, ".", EIGEN_MINOR_VERSION);
-#ifdef TENSORFLOW_USE_LIBXSMM
-  (*device.mutable_environment())["libxsmm"] = LIBXSMM_VERSION;
-#endif
 
   return device;
 }
@@ -90,7 +83,18 @@ DeviceProperties GetLocalGPUInfo(PlatformDeviceId platform_device_id) {
 
   device.set_vendor("NVIDIA");
   device.set_model(properties.name);
-  device.set_frequency(properties.clockRate * 1e-3);
+
+  int clockRate;
+  error = cudaDeviceGetAttribute(&clockRate, cudaDevAttrClockRate,
+                                 platform_device_id.value());
+  if (error != cudaSuccess) {
+    device.set_type("ERROR");
+    LOG(ERROR) << "Failed to get device attribute clockRate, error code: "
+               << error;
+    return device;
+  }
+
+  device.set_frequency(clockRate * 1e-3);
   device.set_num_cores(properties.multiProcessorCount);
   device.set_num_registers(properties.regsPerMultiprocessor);
   // For compute capability less than 5, l1 cache size is configurable to
@@ -106,8 +110,21 @@ DeviceProperties GetLocalGPUInfo(PlatformDeviceId platform_device_id) {
   device.set_memory_size(properties.totalGlobalMem);
   // 8 is the number of bits per byte. 2 is accounted for
   // double data rate (DDR).
-  device.set_bandwidth(properties.memoryBusWidth / 8 *
-                       properties.memoryClockRate * 2);
+
+  int memoryClockRate;
+#if CUDART_VERSION >= 13000
+  error = cudaDeviceGetAttribute(&memoryClockRate, cudaDevAttrMemoryClockRate,
+                                 platform_device_id.value());
+  if (error != cudaSuccess) {
+    device.set_type("ERROR");
+    LOG(ERROR) << "Failed to get device attribute memoryClockRate, error code: "
+               << error;
+    return device;
+  }
+#else
+  memoryClockRate = properties.memoryClockRate;
+#endif
+  device.set_bandwidth(properties.memoryBusWidth / 8 * memoryClockRate * 2ULL);
 
   (*device.mutable_environment())["architecture"] =
       strings::StrCat(properties.major, ".", properties.minor);
@@ -139,10 +156,10 @@ DeviceProperties GetLocalGPUInfo(PlatformDeviceId platform_device_id) {
   // 8 is the number of bits per byte. 2 is accounted for
   // double data rate (DDR).
   device.set_bandwidth(properties.memoryBusWidth / 8 *
-                       properties.memoryClockRate * 2);
+                       properties.memoryClockRate * 2ULL);
 
   (*device.mutable_environment())["architecture"] =
-      strings::StrCat("gfx", properties.gcnArch);
+      strings::StrCat("gfx", properties.gcnArchName);
 #endif
 
   return device;
@@ -158,7 +175,7 @@ DeviceProperties GetDeviceInfo(const DeviceNameUtils::ParsedName& device) {
     if (device.has_id) {
       TfDeviceId tf_device_id(device.id);
       PlatformDeviceId platform_device_id;
-      Status s =
+      absl::Status s =
           GpuIdManager::TfToPlatformDeviceId(tf_device_id, &platform_device_id);
       if (!s.ok()) {
         LOG(ERROR) << s;

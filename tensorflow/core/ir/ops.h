@@ -26,7 +26,9 @@ limitations under the License.
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/IR/RegionKindInterface.h"  // from @llvm-project
 #include "mlir/IR/TypeUtilities.h"  // from @llvm-project
+#include "mlir/Interfaces/CallInterfaces.h"  // from @llvm-project
 #include "mlir/Interfaces/ControlFlowInterfaces.h"  // from @llvm-project
+#include "mlir/Interfaces/FunctionInterfaces.h"  // from @llvm-project
 #include "mlir/Interfaces/InferTypeOpInterface.h"  // from @llvm-project
 #include "tensorflow/core/ir/dialect.h"
 #include "tensorflow/core/ir/interfaces.h"
@@ -47,8 +49,12 @@ struct FunctionTable {
   // Returns whether there are no functions.
   bool empty() const { return functions.empty(); }
 
-  // Returns whether `op` may be a call.
-  bool MaybeCall(Operation* op);
+  // Returns whether `op` may be a function call.
+  bool MayBeCall(Operation* op) const;
+
+  // Returns whether `op` is a legacy function call. A "legacy" function call
+  // is when the operation name is the name of a function in the library.
+  bool IsLegacyCall(Operation* op) const;
 
  private:
   // All the functions in the graph.

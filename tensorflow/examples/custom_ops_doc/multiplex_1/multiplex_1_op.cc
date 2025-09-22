@@ -13,8 +13,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "xla/tsl/platform/errors.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/shape_inference.h"
+#include "tensorflow/core/platform/status.h"
 
 // Use a namespace when registering by prepending the
 // package's name to the op’s name and separate with a '>'.
@@ -22,7 +24,7 @@ limitations under the License.
 // "Best practices for custom operations in TensorFlow"
 // https://github.com/tensorflow/community/blob/master/rfcs/20190726-custom-ops.md
 
-REGISTER_OP("Examples>MultiplexDense")
+REGISTER_OP("Examples1>MultiplexDense")
     .Input("cond: bool")
     .Input("a_values: T")
     .Input("b_values: T")
@@ -41,7 +43,7 @@ REGISTER_OP("Examples>MultiplexDense")
       TF_RETURN_IF_ERROR(c->Merge(c->input(0), c->input(2), &unused));
 
       c->set_output(0, out);
-      return tensorflow::Status::OK();
+      return ::tensorflow::OkStatus();
     })
     .Doc(R"doc(
 Return elements chosen from `a` or `b` depending on `cond`.

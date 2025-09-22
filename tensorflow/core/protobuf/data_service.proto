@@ -72,13 +72,20 @@ message DataServiceMetadata {
     COMPRESSION_UNSPECIFIED = 0;
     // No compression.
     COMPRESSION_OFF = 1;
-    // Snappy compression as defined in tensorflow/core/platform/snappy.h.
+    // AUTO compression, either none or snappy compression as defined in
+    // tensorflow/core/platform/snappy.h.
     COMPRESSION_SNAPPY = 2;
+    // Forced a snappy compression as in tensorflow/core/platform/snappy.h.
+    COMPRESSION_FORCED_SNAPPY = 3;
   }
   Compression compression = 2;
 
   // Cardinality of the dataset.
   int64 cardinality = 3;
+}
+
+message CrossTrainerCacheOptions {
+  string trainer_id = 1;
 }
 
 // Data service config available to the client through GetDataServiceConfig RPC.

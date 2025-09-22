@@ -1,7 +1,10 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("//tensorflow:tensorflow.default.bzl", "get_compatible_with_portable")
 load("//tensorflow/lite:special_rules.bzl", "if_nnapi")
-load("//tensorflow:tensorflow.bzl", "get_compatible_with_portable")
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = [
         "//visibility:public",
     ],
@@ -62,7 +65,7 @@ cc_library(
     deps = [
         ":nnapi_implementation_headers",
         "//tensorflow/lite:util",
-        "//tensorflow/lite/c:common",
+        "//tensorflow/lite/core/c:common",
     ],
 )
 
@@ -85,6 +88,7 @@ cc_library(
         ":nnapi_lib",
         "//tensorflow/core/platform:logging",
         "//tensorflow/lite:framework",
+        "@com_google_absl//absl/log:check",
     ],
 )
 

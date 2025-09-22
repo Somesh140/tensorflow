@@ -13,8 +13,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <memory>
+#include <utility>
+
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"  // from @llvm-project
-#include "mlir/Dialect/SCF/SCF.h"  // from @llvm-project
+#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/Dialect/SCF/IR/SCF.h"  // from @llvm-project
 #include "mlir/Transforms/DialectConversion.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tools/kernel_gen/transforms/passes.h"
 
@@ -23,11 +27,12 @@ namespace kernel_gen {
 namespace transforms {
 namespace {
 
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_PARALLELLOOPSTOSEQUENTIAL
 #include "tensorflow/compiler/mlir/tools/kernel_gen/transforms/kernel_gen_passes.h.inc"
 
 struct ParallelLoopsToSequentialPass
-    : public ParallelLoopsToSequentialBase<ParallelLoopsToSequentialPass> {
+    : public impl::ParallelLoopsToSequentialBase<
+          ParallelLoopsToSequentialPass> {
   void runOnOperation() override {
     mlir::RewritePatternSet patterns(&getContext());
     mlir::populateSCFToControlFlowConversionPatterns(patterns);
@@ -44,7 +49,7 @@ struct ParallelLoopsToSequentialPass
 
 }  // namespace
 
-std::unique_ptr<mlir::OperationPass<mlir::FuncOp>>
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>>
 CreateParallelLoopsToSequential() {
   return std::make_unique<ParallelLoopsToSequentialPass>();
 }

@@ -7,7 +7,7 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
-distributed under the Licensgoe is distributed on an "AS IS" BASIS,
+distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
@@ -32,8 +32,9 @@ namespace metal {
 
 class Buffer : public GPUObject {
  public:
-  Buffer() {}  // just for using Buffer as a class members
+  Buffer() = default;
   Buffer(id<MTLBuffer> buffer, size_t size_in_bytes);
+  explicit Buffer(id<MTLBuffer> buffer);
 
   // Move only
   Buffer(Buffer&& buffer);
@@ -51,7 +52,10 @@ class Buffer : public GPUObject {
   // Writes data to a buffer. Data should point to a region that
   // has exact size in bytes as size_in_bytes(constructor parameter).
   template <typename T>
-  absl::Status WriteData(const absl::Span<T> data);
+  absl::Status WriteData(absl::Span<T> data);
+  template <typename T>
+  absl::Status WriteData(id<MTLCommandQueue> command_queue, absl::Span<T> data,
+                         bool wait_for_completion);
 
   // Reads data from Buffer into CPU memory.
   template <typename T>
@@ -67,18 +71,33 @@ class Buffer : public GPUObject {
 
   id<MTLBuffer> buffer_ = nullptr;
   size_t size_;
+  bool owner_ = true;
 };
+
+Buffer CreateBufferShared(id<MTLBuffer> buffer);
 
 absl::Status CreateBuffer(size_t size_in_bytes, const void* data, id<MTLDevice> device,
                           Buffer* result);
 
 template <typename T>
 absl::Status Buffer::WriteData(const absl::Span<T> data) {
-  if (size_ != sizeof(T) * data.size()) {
+  if (sizeof(T) * data.size() > size_) {
     return absl::InvalidArgumentError(
-        "absl::Span<T> data size is different from buffer allocated size.");
+        "absl::Span<T> data size is greater from buffer allocated size.");
   }
   std::memcpy([buffer_ contents], data.data(), size_);
+  return absl::OkStatus();
+}
+
+template <typename T>
+absl::Status Buffer::WriteData(id<MTLCommandQueue> command_queue, absl::Span<T> data,
+                               bool wait_for_completion) {
+  if (sizeof(T) * data.size() > size_) {
+    return absl::InvalidArgumentError(
+        "absl::Span<T> data size is greater from buffer allocated size.");
+  }
+  WriteDataToBuffer(buffer_, /*buffer_offset=*/0, command_queue, data.data(), size_,
+                    wait_for_completion);
   return absl::OkStatus();
 }
 

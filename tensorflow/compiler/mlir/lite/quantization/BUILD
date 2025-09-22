@@ -1,59 +1,28 @@
-load("@llvm-project//mlir:tblgen.bzl", "gentbl_cc_library", "td_library")
 load("//tensorflow:tensorflow.bzl", "tf_cc_test", "tf_native_cc_binary")
-load("//tensorflow:tensorflow.bzl", "get_compatible_with_cloud")
 load("//tensorflow/core/platform:build_config.bzl", "tf_proto_library")
 load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    # copybara:uncomment_begin(google-only)
+    # default_visibility = [
+    # ":friends",
+    # "//tensorflow:__pkg__",
+    # ],
+    # copybara:uncomment_end_and_comment_begin
     default_visibility = [
-        ":friends",
+        "//visibility:public",
     ],
+    # copybara:comment_end
     licenses = ["notice"],
 )
 
 package_group(
     name = "friends",
     packages = [
+        "//learning/brain/mlir/quantization/...",
         "//tensorflow/compiler/mlir/...",
         "//tensorflow/lite/tools/optimize/...",
-    ],
-)
-
-exports_files([
-    "quantization_traits.h",
-    "quantization_config.h",
-    "quantization_utils.h",
-])
-
-td_library(
-    name = "quantization_td_files",
-    srcs = [
-        "quantization.td",
-    ],
-    compatible_with = get_compatible_with_cloud(),
-    deps = [
-        "@llvm-project//mlir:OpBaseTdFiles",
-        "@llvm-project//mlir:QuantizationOpsTdFiles",
-    ],
-)
-
-gentbl_cc_library(
-    name = "quantization_interfaces_inc_gen",
-    compatible_with = get_compatible_with_cloud(),
-    tbl_outs = [
-        (
-            ["-gen-op-interface-decls"],
-            "quantization_interface.h.inc",
-        ),
-        (
-            ["-gen-op-interface-defs"],
-            "quantization_interface.cc.inc",
-        ),
-    ],
-    tblgen = "@llvm-project//mlir:mlir-tblgen",
-    td_file = "quantization.td",
-    deps = [
-        ":quantization_td_files",
     ],
 )
 
@@ -62,7 +31,6 @@ tf_proto_library(
     srcs = [
         "quantization_info.proto",
     ],
-    cc_api_version = 2,
 )
 
 cc_library(
@@ -75,66 +43,18 @@ cc_library(
     ],
     deps = [
         ":quantization_info_proto_cc",
+        "//tensorflow/compiler/mlir/lite/quantization/ir:QuantOps",
         "//tensorflow/compiler/mlir/tensorflow:import_utils",
         "//tensorflow/compiler/mlir/tensorflow:location_utils",
-        "//tensorflow/core:lib_proto_parsing",
-        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:QuantOps",
-        "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
     ],
     alwayslink = 1,
-)
-
-cc_library(
-    name = "quantization_lib",
-    srcs = [
-        "quantization_driver.cc",
-        "quantization_interface.cc.inc",
-        "quantization_utils.cc",
-    ],
-    hdrs = [
-        "quantization_interface.h.inc",
-        "quantization_traits.h",
-        "quantization_utils.h",
-    ],
-    deps = [
-        ":quantization_config",
-        "//tensorflow/core:lib_proto_parsing",
-        "//tensorflow/core:protos_all_cc",
-        "//tensorflow/lite/kernels/internal:tensor_utils",
-        "//tensorflow/lite/tools/optimize:quantization_utils",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/strings",
-        "@llvm-project//llvm:Support",
-        "@llvm-project//mlir:ArithmeticDialect",
-        "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:QuantOps",
-        "@llvm-project//mlir:StandardOps",
-        "@llvm-project//mlir:Support",
-    ],
-)
-
-cc_library(
-    name = "quantization_config",
-    srcs = [
-        "quantization_config.cc",
-    ],
-    hdrs = [
-        "quantization_config.h",
-    ],
-    deps = [
-        "//tensorflow/core:protos_all_cc",
-        "//tensorflow/lite/tools/optimize:reduced_precision_support",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/strings",
-        "@llvm-project//llvm:Support",
-    ],
 )
 
 tf_native_cc_binary(
@@ -158,7 +78,10 @@ tf_native_cc_binary(
         "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
         "@llvm-project//llvm:TableGen",
+        "@llvm-project//mlir:IR",
         "@llvm-project//mlir:TableGen",
+        "@local_tsl//tsl/platform:regexp",
+        "@local_xla//xla/tsl/platform:logging",
     ],
 )
 
@@ -177,6 +100,7 @@ cc_library(
     hdrs = ["device_target.h"],
     deps = [
         ":numerical_utils",
+        "//tensorflow/compiler/mlir/lite/quantization/ir:QuantOps",
         "@com_google_absl//absl/types:optional",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
@@ -191,12 +115,12 @@ cc_library(
     hdrs = ["quantization_context.h"],
     deps = [
         ":device_target",
-        ":quantization_lib",
-        "@com_google_absl//absl/memory",
+        "//tensorflow/compiler/mlir/lite/quantization/common/quantization_lib",
+        "//tensorflow/compiler/mlir/lite/quantization/ir:QuantOps",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:QuantOps",
-        "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
     ],
 )

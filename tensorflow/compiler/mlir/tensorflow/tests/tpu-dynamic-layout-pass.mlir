@@ -3,7 +3,7 @@
 // Tests that the pass can transform non-replicated execution.
 
 // CHECK: func @non_replicated(%[[ARG0:.*]]: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32>
-func @non_replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
+func.func @non_replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
   // CHECK: %[[COMPILE:.*]]:2 = "tf_device.launch"
   // CHECK-NEXT: "tf._TPUCompileMlir"()
   %compile:2 = "tf_device.launch"() ({
@@ -14,8 +14,8 @@ func @non_replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CP
       mlir_module = "..."} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>)
     tf_device.return %1#0, %1#1 : tensor<!tf_type.string>, tensor<2x!tf_type.string>
   }) {device = "/device:CPU:0"} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>)
-  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) {index = 0 : i64, is_output = false}
-  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) {index = 1 : i64, is_output = false}
+  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) <{index = 0 : i64, is_output = false}>
+  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) <{index = 1 : i64, is_output = false}>
   // CHECK: %[[ITER:.*]]:2 = "tf.IteratorGetNext"
   %2:2 = "tf.IteratorGetNext"(%arg0) {device = "/device:CPU:0"}
     : (tensor<*x!tf_type.resource>) -> (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>)
@@ -34,7 +34,7 @@ func @non_replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CP
       : (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>, tensor<2x!tf_type.string>) -> tensor<i32>
     tf_device.return %3 : tensor<i32>
   }) {device = "/device:TPU:0"} : () -> tensor<i32>
-  return %execute : tensor<i32>
+  func.return %execute : tensor<i32>
 }
 
 // -----
@@ -43,7 +43,7 @@ func @non_replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CP
 // compile op.
 
 // CHECK-LABEL: func @multiple_compile_uses
-func @multiple_compile_uses(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
+func.func @multiple_compile_uses(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
   %compile:2 = "tf_device.launch"() ({
     %1:2 = "tf._TPUCompileMlir"() {
       NumDynamicShapes = 0 : i64,
@@ -71,7 +71,7 @@ func @multiple_compile_uses(%arg0: tensor<*x!tf_type.resource> {tf.device = "/de
       : (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>, tensor<2x!tf_type.string>) -> tensor<i32>
     tf_device.return %5 : tensor<i32>
   }) {device = "/device:TPU:0"} : () -> tensor<i32>
-  return %execute1 : tensor<i32>
+  func.return %execute1 : tensor<i32>
 }
 
 // -----
@@ -79,7 +79,7 @@ func @multiple_compile_uses(%arg0: tensor<*x!tf_type.resource> {tf.device = "/de
 // Tests that the pass does not transform when tf.IteratorGetNext is on TPU.
 
 // CHECK-LABEL: func @on_tpu_iter
-func @on_tpu_iter(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:TPU:0"}) -> tensor<i32> {
+func.func @on_tpu_iter(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:TPU:0"}) -> tensor<i32> {
   %compile:2 = "tf_device.launch"() ({
     %1:2 = "tf._TPUCompileMlir"() {
       NumDynamicShapes = 0 : i64,
@@ -101,7 +101,7 @@ func @on_tpu_iter(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:TPU:0
       : (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>, tensor<2x!tf_type.string>) -> tensor<i32>
     tf_device.return %3 : tensor<i32>
   }) {device = "/device:TPU:0"} : () -> tensor<i32>
-  return %execute : tensor<i32>
+  func.return %execute : tensor<i32>
 }
 
 // -----
@@ -110,7 +110,7 @@ func @on_tpu_iter(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:TPU:0
 // but generator is on TPU.
 
 // CHECK-LABEL: func @arg_on_tpu_iter_on_cpu
-func @arg_on_tpu_iter_on_cpu(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:TPU:0"}) -> tensor<i32> {
+func.func @arg_on_tpu_iter_on_cpu(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:TPU:0"}) -> tensor<i32> {
   %compile:2 = "tf_device.launch"() ({
     %1:2 = "tf._TPUCompileMlir"() {
       NumDynamicShapes = 0 : i64,
@@ -132,7 +132,7 @@ func @arg_on_tpu_iter_on_cpu(%arg0: tensor<*x!tf_type.resource> {tf.device = "/d
       : (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>, tensor<2x!tf_type.string>) -> tensor<i32>
     tf_device.return %3 : tensor<i32>
   }) {device = "/device:TPU:0"} : () -> tensor<i32>
-  return %execute : tensor<i32>
+  func.return %execute : tensor<i32>
 }
 
 // -----
@@ -142,7 +142,7 @@ func @arg_on_tpu_iter_on_cpu(%arg0: tensor<*x!tf_type.resource> {tf.device = "/d
 // generator and IteratorGetNext are on CPU too.
 
 // CHECK-LABEL: func @arg_on_tpu_intermediate_ops_on_cpu
-func @arg_on_tpu_intermediate_ops_on_cpu(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:TPU:0"}) -> tensor<i32> {
+func.func @arg_on_tpu_intermediate_ops_on_cpu(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:TPU:0"}) -> tensor<i32> {
   %compile:2 = "tf_device.launch"() ({
     %1:2 = "tf._TPUCompileMlir"() {
       NumDynamicShapes = 0 : i64,
@@ -166,7 +166,7 @@ func @arg_on_tpu_intermediate_ops_on_cpu(%arg0: tensor<*x!tf_type.resource> {tf.
       : (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>, tensor<2x!tf_type.string>) -> tensor<i32>
     tf_device.return %3 : tensor<i32>
   }) {device = "/device:TPU:0"} : () -> tensor<i32>
-  return %execute : tensor<i32>
+  func.return %execute : tensor<i32>
 }
 
 // -----
@@ -175,7 +175,7 @@ func @arg_on_tpu_intermediate_ops_on_cpu(%arg0: tensor<*x!tf_type.resource> {tf.
 // generator is on TPU.
 
 // CHECK-LABEL: func @var_handle_on_tpu_iter_on_cpu
-func @var_handle_on_tpu_iter_on_cpu() -> tensor<i32> {
+func.func @var_handle_on_tpu_iter_on_cpu() -> tensor<i32> {
   %compile:2 = "tf_device.launch"() ({
     %1:2 = "tf._TPUCompileMlir"() {
       NumDynamicShapes = 0 : i64,
@@ -198,7 +198,7 @@ func @var_handle_on_tpu_iter_on_cpu() -> tensor<i32> {
       : (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>, tensor<2x!tf_type.string>) -> tensor<i32>
     tf_device.return %3 : tensor<i32>
   }) {device = "/device:TPU:0"} : () -> tensor<i32>
-  return %execute : tensor<i32>
+  func.return %execute : tensor<i32>
 }
 
 // -----
@@ -206,7 +206,7 @@ func @var_handle_on_tpu_iter_on_cpu() -> tensor<i32> {
 // Tests that the pass does not change unsupported input ops.
 
 // CHECK-LABEL: func @unsupported_ops
-func @unsupported_ops(%arg0: tensor<3x3x1x32xf32> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
+func.func @unsupported_ops(%arg0: tensor<3x3x1x32xf32> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
   %compile:2 = "tf_device.launch"() ({
     %1:2 = "tf._TPUCompileMlir"() {
       NumDynamicShapes = 0 : i64,
@@ -227,7 +227,7 @@ func @unsupported_ops(%arg0: tensor<3x3x1x32xf32> {tf.device = "/device:CPU:0"})
       : (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>, tensor<2x!tf_type.string>) -> tensor<i32>
     tf_device.return %3 : tensor<i32>
   }) {device = "/device:TPU:0"} : () -> tensor<i32>
-  return %execute : tensor<i32>
+  func.return %execute : tensor<i32>
 }
 
 // -----
@@ -235,7 +235,7 @@ func @unsupported_ops(%arg0: tensor<3x3x1x32xf32> {tf.device = "/device:CPU:0"})
 // Tests that the pass can transform replicated execution.
 
 // CHECK: func @replicated(%[[ARG0:.*]]: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32>
-func @replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
+func.func @replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
   // CHECK: %[[ITER0:.*]]:2 = "tf.IteratorGetNext"
   %2:2 = "tf.IteratorGetNext"(%arg0) {device = "/device:CPU:0"}
     : (tensor<*x!tf_type.resource>) -> (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>)
@@ -249,8 +249,8 @@ func @replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"
       mlir_module = "..."} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>)
     tf_device.return %1#0, %1#1 : tensor<!tf_type.string>, tensor<2x!tf_type.string>
   }) {device = "/device:CPU:0"} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>)
-  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) {index = 0 : i64, is_output = false}
-  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) {index = 1 : i64, is_output = false}
+  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) <{index = 0 : i64, is_output = false}>
+  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) <{index = 1 : i64, is_output = false}>
   // CHECK: %[[ITER1:.*]]:2 = "tf.IteratorGetNext"
   %3:2 = "tf.IteratorGetNext"(%arg0) {device = "/device:CPU:0"}
     : (tensor<*x!tf_type.resource>) -> (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>)
@@ -272,7 +272,7 @@ func @replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"
     }) {device = "TPU_REPLICATED_CORE_0"} : () -> tensor<i32>
     tf_device.return %execute : tensor<i32>
   }
-  return %5#0 : tensor<i32>
+  func.return %5#0 : tensor<i32>
 }
 
 // -----
@@ -280,7 +280,7 @@ func @replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"
 // Tests that the pass can transform replicated execution with packed inputs.
 
 // CHECK: func @replicated_packed(%[[ARG0:.*]]: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32>
-func @replicated_packed(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
+func.func @replicated_packed(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
   // CHECK: %[[ITER0:.*]]:2 = "tf.IteratorGetNext"
   %2:2 = "tf.IteratorGetNext"(%arg0) {device = "/device:CPU:0"}
     : (tensor<*x!tf_type.resource>) -> (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>)
@@ -294,8 +294,8 @@ func @replicated_packed(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device
       mlir_module = "..."} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>)
     tf_device.return %1#0, %1#1 : tensor<!tf_type.string>, tensor<2x!tf_type.string>
   }) {device = "/device:CPU:0"} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>)
-  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) {index = 0 : i64, is_output = false}
-  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) {index = 1 : i64, is_output = false}
+  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) <{index = 0 : i64, is_output = false}>
+  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) <{index = 1 : i64, is_output = false}>
 
   // CHECK-DAG: %[[COPY0:.*]] = "tf.TPUCopyWithLayout"(%[[ITER0]]#0, %[[LAYOUT0]]) {device = "/device:TPU:0"}
   // CHECK-DAG: %[[COPY1:.*]] = "tf.TPUCopyWithLayout"(%[[ITER0]]#1, %[[LAYOUT1]]) {device = "/device:TPU:0"}
@@ -309,7 +309,7 @@ func @replicated_packed(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device
     }) {device = "TPU_REPLICATED_CORE_0"} : () -> tensor<i32>
     tf_device.return %execute : tensor<i32>
   }
-  return %5#0 : tensor<i32>
+  func.return %5#0 : tensor<i32>
 }
 
 // -----
@@ -318,7 +318,7 @@ func @replicated_packed(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device
 // and packed operands.
 
 // CHECK: func @replicated(%[[ARG0:.*]]: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32>
-func @replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}, %arg1: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
+func.func @replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}, %arg1: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
   // CHECK: %[[ITER0:.*]]:2 = "tf.IteratorGetNext"
   %2:2 = "tf.IteratorGetNext"(%arg0) {device = "/device:CPU:0"}
     : (tensor<*x!tf_type.resource>) -> (tensor<3x3x1x32xf32>, tensor<3x3x1x32xf32>)
@@ -332,8 +332,8 @@ func @replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"
       mlir_module = "..."} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>)
     tf_device.return %1#0, %1#1 : tensor<!tf_type.string>, tensor<2x!tf_type.string>
   }) {device = "/device:CPU:0"} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>)
-  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) {index = 0 : i64, is_output = false}
-  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) {index = 1 : i64, is_output = false}
+  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) <{index = 0 : i64, is_output = false}>
+  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) <{index = 1 : i64, is_output = false}>
   // CHECK: %[[ITER1:.*]] = "tf.IteratorGetNext"
   %3 = "tf.IteratorGetNext"(%arg1) {device = "/device:CPU:0"}
     : (tensor<*x!tf_type.resource>) -> tensor<3x3x1x32xf32>
@@ -354,7 +354,7 @@ func @replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"
     }) {device = "TPU_REPLICATED_CORE_0"} : () -> tensor<i32>
     tf_device.return %execute : tensor<i32>
   }
-  return %5#0 : tensor<i32>
+  func.return %5#0 : tensor<i32>
 }
 
 // -----
@@ -362,7 +362,7 @@ func @replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"
 // Tests that the pass does not change inputs inside replicate.
 
 // CHECK-LABEL: func @inside_replicated
-func @inside_replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}, %arg1: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
+func.func @inside_replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}, %arg1: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) -> tensor<i32> {
   %compile:2 = "tf_device.launch"() ({
     %1:2 = "tf._TPUCompileMlir"() {
       NumDynamicShapes = 0 : i64,
@@ -387,7 +387,7 @@ func @inside_replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device
     }) {device = "TPU_REPLICATED_CORE_0"} : () -> tensor<i32>
     tf_device.return %execute : tensor<i32>
   }
-  return %5#0 : tensor<i32>
+  func.return %5#0 : tensor<i32>
 }
 
 // -----
@@ -408,15 +408,15 @@ func @inside_replicated(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device
 // num_cores_per_replica: 2
 
 // CHECK-LABEL: func @parallel_execute
-func @parallel_execute(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) {
+func.func @parallel_execute(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) {
   // CHECK: %[[COMPILE:.*]]:3 = "tf_device.launch"
   // CHECK-NEXT: "tf._TPUCompileMlir"()
   %compile:3 = "tf_device.launch"() ({
     %1:3 = "tf._TPUCompileMlir"() {NumDynamicShapes = 0 : i64, metadata = "\0A\09\08\01\12\05\12\03\08\80\01\18\01 \02", mlir_module = "..."} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>, tensor<2x!tf_type.string>)
     tf_device.return %1#0, %1#1, %1#2 : tensor<!tf_type.string>, tensor<2x!tf_type.string>, tensor<2x!tf_type.string>
   }) {device = "/device:CPU:0"} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>, tensor<2x!tf_type.string>)
-  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) {index = 0 : i64, is_output = false}
-  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#2) {index = 0 : i64, is_output = false}
+  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) <{index = 0 : i64, is_output = false}>
+  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#2) <{index = 0 : i64, is_output = false}>
   // CHECK: %[[ITER:.*]]:2 = "tf.IteratorGetNext"
   %2:2 = "tf.IteratorGetNext"(%arg0) {device = "/device:CPU:0"} : (tensor<*x!tf_type.resource>) -> (tensor<128xf32>, tensor<128xf32>)
   // CHECK: "tf.TPUCompileSucceededAssert"(%[[COMPILE]]#0)
@@ -429,9 +429,9 @@ func @parallel_execute(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:
     // CHECK-NEXT: %[[COPY0:.*]] = "tf.TPUCopyWithLayout"(%[[ITER]]#0, %[[LAYOUT0]])
     // CHECK-SAME: device = "/device:TPU:0"
     // CHECK-NEXT: "tf_device.launch"
+    // CHECK-SAME: device = "/device:TPU:0"
     // CHECK-NEXT: "tf.TPUExecute"(%[[COPY0]], %[[COMPILE]]#1)
     // CHECK-NEXT: tf_device.return
-    // CHECK-NEXT: device = "/device:TPU:0"
     "tf_device.launch"() ({
       "tf.TPUExecute"(%2#0, %compile#1) : (tensor<128xf32>, tensor<2x!tf_type.string>) -> ()
       tf_device.return
@@ -442,16 +442,16 @@ func @parallel_execute(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:
     // CHECK: %[[COPY1:.*]] = "tf.TPUCopyWithLayout"(%[[ITER]]#1, %[[LAYOUT1]])
     // CHECK-SAME: device = "/device:TPU:1"
     // CHECK-NEXT: "tf_device.launch"
+    // CHECK-SAME: device = "/device:TPU:1"
     // CHECK-NEXT: "tf.TPUExecute"(%[[COPY1]], %[[COMPILE]]#2)
     // CHECK-NEXT: tf_device.return
-    // CHECK-NEXT: device = "/device:TPU:1"
     "tf_device.launch"() ({
       "tf.TPUExecute"(%2#1, %compile#2) : (tensor<128xf32>, tensor<2x!tf_type.string>) -> ()
       tf_device.return
     }) {device = "/device:TPU:1"} : () -> ()
     tf_device.return
   }) {} : () -> ()
-  return
+  func.return
 }
 
 // -----
@@ -474,15 +474,15 @@ func @parallel_execute(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:
 // CHECK-LABEL: func @replicated_parallel_execute
 // CHECK-SAME: %[[ARG0:[a-z0-9]+]]: tensor<*x!tf_type.resource>
 // CHECK-SAME: %[[ARG1:[a-z0-9]+]]: tensor<*x!tf_type.resource>
-func @replicated_parallel_execute(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}, %arg1: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) {
+func.func @replicated_parallel_execute(%arg0: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}, %arg1: tensor<*x!tf_type.resource> {tf.device = "/device:CPU:0"}) {
   // CHECK: %[[COMPILE:.*]]:3 = "tf_device.launch"
   // CHECK-NEXT: "tf._TPUCompileMlir"()
   %compile:3 = "tf_device.launch"() ({
     %1:3 = "tf._TPUCompileMlir"() {NumDynamicShapes = 0 : i64, metadata = "\0A\09\08\01\12\05\12\03\08\80\01\18\02 \02", mlir_module = "..."} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>, tensor<2x!tf_type.string>)
     tf_device.return %1#0, %1#1, %1#2 : tensor<!tf_type.string>, tensor<2x!tf_type.string>, tensor<2x!tf_type.string>
   }) {device = "/device:CPU:0"} : () -> (tensor<!tf_type.string>, tensor<2x!tf_type.string>, tensor<2x!tf_type.string>)
-  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) {index = 0 : i64, is_output = false}
-  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#2) {index = 0 : i64, is_output = false}
+  // CHECK-DAG: %[[LAYOUT0:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#1) <{index = 0 : i64, is_output = false}>
+  // CHECK-DAG: %[[LAYOUT1:.*]] = "tf.TPUGetLayoutOp"(%[[COMPILE]]#2) <{index = 0 : i64, is_output = false}>
   // CHECK-DAG: %[[ITER0:.*]]:2 = "tf.IteratorGetNext"(%[[ARG0]])
   // CHECK-DAG: %[[ITER1:.*]]:2 = "tf.IteratorGetNext"(%[[ARG1]])
   %2:2 = "tf.IteratorGetNext"(%arg0) {device = "/device:CPU:0"} : (tensor<*x!tf_type.resource>) -> (tensor<128xf32>, tensor<128xf32>)
@@ -501,9 +501,10 @@ func @replicated_parallel_execute(%arg0: tensor<*x!tf_type.resource> {tf.device 
   tf_device.replicate([%2#0, %3#0] as %r0: tensor<128xf32>, [%2#1, %3#1] as %r1: tensor<128xf32>) {n = 2 : i32, devices = {TPU_REPLICATED_CORE_0 = ["/device:TPU:0", "/device:TPU:1"], TPU_REPLICATED_CORE_1 = ["/device:TPU:2", "/device:TPU:3"]}} {
     // CHECK: "tf_device.parallel_execute"
     "tf_device.parallel_execute"() ({
+      // CHECK: "tf_device.launch"
+      // CHECK-SAME: device = "TPU_REPLICATED_CORE_0"
       // CHECK: "tf.TPUExecute"(%[[R0]], %[[COMPILE]]#1)
       // CHECK-NEXT: tf_device.return
-      // CHECK-NEXT: device = "TPU_REPLICATED_CORE_0"
       "tf_device.launch"() ({
         "tf.TPUExecute"(%r0, %compile#1) : (tensor<128xf32>, tensor<2x!tf_type.string>) -> ()
         tf_device.return
@@ -511,9 +512,10 @@ func @replicated_parallel_execute(%arg0: tensor<*x!tf_type.resource> {tf.device 
       tf_device.return
     },
     {
+      // CHECK: "tf_device.launch"
+      // CHECK-SAME: device = "TPU_REPLICATED_CORE_1"
       // CHECK: "tf.TPUExecute"(%[[R1]], %[[COMPILE]]#2)
       // CHECK-NEXT: tf_device.return
-      // CHECK-NEXT: device = "TPU_REPLICATED_CORE_1"
       "tf_device.launch"() ({
         "tf.TPUExecute"(%r1, %compile#2) : (tensor<128xf32>, tensor<2x!tf_type.string>) -> ()
         tf_device.return
@@ -522,5 +524,5 @@ func @replicated_parallel_execute(%arg0: tensor<*x!tf_type.resource> {tf.device 
     }) {} : () -> ()
     tf_device.return
   }
-  return
+  func.return
 }

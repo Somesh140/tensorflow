@@ -15,15 +15,17 @@ limitations under the License.
 #ifndef TENSORFLOW_COMPILER_MLIR_LITE_QUANTIZATION_LITE_QUANTIZE_WEIGHTS_H_
 #define TENSORFLOW_COMPILER_MLIR_LITE_QUANTIZATION_LITE_QUANTIZE_WEIGHTS_H_
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
-#include "tensorflow/lite/core/api/error_reporter.h"
-#include "tensorflow/lite/model.h"
-#include "tensorflow/lite/schema/schema_generated.h"
+#include "absl/status/status.h"
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "tensorflow/compiler/mlir/lite/schema/schema_generated.h"
 
 namespace mlir {
 namespace lite {
@@ -33,8 +35,8 @@ enum class BufferType { QUANTIZED_INT8, QUANTIZED_FLOAT16 };
 
 // Stores information about how to quantize a user-specified custom operation.
 // CustomOpInfo contains info of its corresponding CustomOp registered in the
-// CustomOpMap. 'quantizable_input_indices' is used to determine which indicies
-// of the CustomOp is quantizable. 'is_weight_only' is used specify whether the
+// CustomOpMap. 'quantizable_input_indices' is used to determine which indices
+// of the CustomOp are quantizable. 'is_weight_only' is used specify whether the
 // custom op is quantized only for storage and dequantized at runtime.
 // 'no_side_effect' is used to determine whether the op can be pruned if
 // considered as trivially dead.
@@ -44,7 +46,6 @@ struct CustomOpInfo {
   bool no_side_effect = true;
 };
 
-using StringSet = absl::flat_hash_set<std::string>;
 using BuiltinOperatorSet = absl::flat_hash_set<tflite::BuiltinOperator>;
 // Map from custom op code to custom op quantization information.
 using CustomOpMap = std::unordered_map<std::string, CustomOpInfo>;
@@ -57,29 +58,27 @@ using CustomOpMap = std::unordered_map<std::string, CustomOpInfo>;
 // third_party/tensorflow/lite/tools/optimize/quantize_weights.h.
 // TODO(b/202468183): Selective quantization + quant debugger support for
 // dynamic range quantization for verify_numeric and whole_model_verify flags.
-TfLiteStatus QuantizeWeights(flatbuffers::FlatBufferBuilder* builder,
-                             const tflite::Model* input_model,
-                             tflite::ErrorReporter* error_reporter,
-                             const tflite::TensorType& inference_type,
-                             const StringSet& denylisted_ops,
-                             const CustomOpMap& custom_op_map,
-                             int64_t minimum_elements_for_weights = 1024,
-                             bool disable_per_channel = false,
-                             bool weight_only_quantization = false,
-                             bool legacy_float_scale = false);
+absl::Status QuantizeWeights(
+    flatbuffers::FlatBufferBuilder* builder, const tflite::Model* input_model,
+    const tflite::TensorType& inference_type,
+    const absl::flat_hash_set<std::string>& denylisted_ops,
+    const CustomOpMap& custom_op_map,
+    int64_t minimum_elements_for_weights = 1024,
+    bool disable_per_channel = false, bool weight_only_quantization = false,
+    bool legacy_float_scale = false);
 
 // Overloading methods to support old quantizer versions API
-TfLiteStatus QuantizeWeights(flatbuffers::FlatBufferBuilder* builder,
+absl::Status QuantizeWeights(flatbuffers::FlatBufferBuilder* builder,
                              const tflite::Model* input_model,
                              int64_t weights_min_num_elements,
                              bool use_hybrid_evaluation = true);
 
-TfLiteStatus QuantizeWeights(flatbuffers::FlatBufferBuilder* builder,
+absl::Status QuantizeWeights(flatbuffers::FlatBufferBuilder* builder,
                              const tflite::Model* input_model,
                              BufferType quant_type = BufferType::QUANTIZED_INT8,
                              bool use_updated_hybrid_scheme = true);
 
-TfLiteStatus QuantizeWeights(flatbuffers::FlatBufferBuilder* builder,
+absl::Status QuantizeWeights(flatbuffers::FlatBufferBuilder* builder,
                              const tflite::Model* input_model,
                              int64_t weights_min_num_elements,
                              const CustomOpMap& custom_op_map,

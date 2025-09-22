@@ -13,9 +13,12 @@
 # limitations under the License.
 # ==============================================================================
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("//tensorflow/lite:build_def.bzl", "tflite_copts", "tflite_linkopts")
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = ["//tensorflow/lite:__subpackages__"],
     licenses = ["notice"],
 )
@@ -28,6 +31,7 @@ cc_library(
     deps = [
         "//tensorflow/core:tflite_portable_logging",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
     ],
 )
 

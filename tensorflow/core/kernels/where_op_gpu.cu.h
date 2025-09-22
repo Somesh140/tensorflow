@@ -20,7 +20,7 @@ limitations under the License.
 
 #define EIGEN_USE_GPU
 
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+#include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_types.h"
@@ -178,7 +178,7 @@ struct NumTrue<GPUDevice, T, TIndex> {
           temp_storage_bytes, ", status: ", GpuGetErrorString(second_success));
     }
 
-    return Status::OK();
+    return OkStatus();
   }
 };
 
@@ -219,6 +219,7 @@ class WhereOutputIterator {
       iterator_category;  ///< The iterator category
 #endif  // THRUST_VERSION
 
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE
   WhereOutputIterator(int64* ptr, const Eigen::DenseIndex max_row)
       : ptr_(ptr), max_row_(max_row) {}
 
@@ -231,6 +232,16 @@ class WhereOutputIterator {
     // the end and confirm that it matches the number of rows of output.
     const bool valid = FastBoundsCheck(n, max_row_);
     return *(ptr_ + (valid ? (NDIM * n) : 0));
+  }
+
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE reference operator*() const {
+    // Dereference the current pointer
+    return *ptr_;
+  }
+
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE self_type
+  operator+(std::ptrdiff_t n) const {
+    return self_type(ptr_ + NDIM * n, max_row_);
   }
 
  private:
@@ -261,7 +272,7 @@ struct Where<GPUDevice, NDIM, T, TIndex> {
       typename TTypes<int64_t>::Matrix output, TIndex* found_true_host) {
     if (output.dimension(0) == 0) {
       // Nothing to do.
-      return Status::OK();
+      return OkStatus();
     }
 
     const auto& cu_stream = GetGpuStream(ctx);
@@ -328,7 +339,7 @@ struct Where<GPUDevice, NDIM, T, TIndex> {
                                 d.stream(), output_rows, strides,
                                 output.data()));
 
-    return Status::OK();
+    return OkStatus();
   }
 };
 

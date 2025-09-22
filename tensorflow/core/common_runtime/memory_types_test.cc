@@ -15,10 +15,15 @@ limitations under the License.
 
 #include "tensorflow/core/common_runtime/memory_types.h"
 
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/framework/types.pb.h"
+#include "tensorflow/core/graph/graph.h"
 #include "tensorflow/core/graph/testlib.h"
-#include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 
@@ -47,7 +52,7 @@ TEST(MemoryTypeChecker, Int32NotOk) {
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
   // There is no kernel for casting int32/host memory to float/device
   // memory.
-  EXPECT_TRUE(errors::IsInternal(ValidateMemoryTypes(DEVICE_GPU, g)));
+  EXPECT_TRUE(absl::IsInternal(ValidateMemoryTypes(DEVICE_GPU, g)));
 
   // But we can insert _HostSend/_HostRecv to ensure the invariant.
   TF_EXPECT_OK(EnsureMemoryTypes(DEVICE_GPU, "/device:GPU:0", g));

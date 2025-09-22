@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "absl/status/status.h"
 #include "tensorflow/cc/saved_model/constants.h"
 #include "tensorflow/cc/saved_model/loader.h"
 #include "tensorflow/cc/saved_model/signature_constants.h"
@@ -20,7 +21,6 @@ limitations under the License.
 #include "tensorflow/core/example/example.pb.h"
 #include "tensorflow/core/example/feature.pb.h"
 #include "tensorflow/core/framework/tensor_testutil.h"
-#include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/lib/io/path.h"
@@ -98,10 +98,10 @@ class LoaderTest : public ::testing::Test {
     RunOptions run_options;
     run_options.set_output_partition_graphs(true);
     RunMetadata run_metadata;
-    Status s =
+    absl::Status s =
         bundle.GetSession()->Run(run_options, {{input_name, input}},
                                  {output_name}, {}, &outputs, &run_metadata);
-    ASSERT_TRUE(errors::IsInvalidArgument(s));
+    ASSERT_TRUE(absl::IsInvalidArgument(s));
   }
 };
 
@@ -132,8 +132,8 @@ TEST_F(LoaderTest, ExtendFailsTest) {
       io::JoinPath(testing::TensorFlowSrcRoot(), kTestDataSharded);
   TF_ASSERT_OK(LoadSavedModel(session_options, run_options, export_dir,
                               {kSavedModelTagServe}, &bundle));
-  Status s = bundle.GetSession()->Extend({});
-  ASSERT_TRUE(errors::IsUnimplemented(s));
+  absl::Status s = bundle.GetSession()->Extend({});
+  ASSERT_TRUE(absl::IsUnimplemented(s));
 }
 
 TEST_F(LoaderTest, TagMatch) {
@@ -155,13 +155,13 @@ TEST_F(LoaderTest, NoTagMatch) {
 
   const string export_dir =
       io::JoinPath(testing::TensorFlowSrcRoot(), kTestDataSharded);
-  Status st = LoadSavedModel(session_options, run_options, export_dir,
-                             {"missing-tag"}, &bundle);
+  absl::Status st = LoadSavedModel(session_options, run_options, export_dir,
+                                   {"missing-tag"}, &bundle);
   EXPECT_FALSE(st.ok());
   EXPECT_TRUE(absl::StrContains(
-      st.error_message(),
+      st.message(),
       "Could not find meta graph def matching supplied tags: { missing-tag }"))
-      << st.error_message();
+      << st.message();
 }
 
 TEST_F(LoaderTest, NoTagMatchMultiple) {
@@ -171,13 +171,13 @@ TEST_F(LoaderTest, NoTagMatchMultiple) {
 
   const string export_dir =
       io::JoinPath(testing::TensorFlowSrcRoot(), kTestDataSharded);
-  Status st = LoadSavedModel(session_options, run_options, export_dir,
-                             {kSavedModelTagServe, "missing-tag"}, &bundle);
+  absl::Status st =
+      LoadSavedModel(session_options, run_options, export_dir,
+                     {kSavedModelTagServe, "missing-tag"}, &bundle);
   EXPECT_FALSE(st.ok());
   EXPECT_TRUE(absl::StrContains(
-      st.error_message(),
-      "Could not find meta graph def matching supplied tags: "))
-      << st.error_message();
+      st.message(), "Could not find meta graph def matching supplied tags: "))
+      << st.message();
 }
 
 TEST_F(LoaderTest, SessionCreationFailure) {
@@ -191,11 +191,10 @@ TEST_F(LoaderTest, SessionCreationFailure) {
 
   const string export_dir =
       io::JoinPath(testing::TensorFlowSrcRoot(), kTestDataSharded);
-  Status st = LoadSavedModel(session_options, run_options, export_dir,
-                             {kSavedModelTagServe}, &bundle);
+  absl::Status st = LoadSavedModel(session_options, run_options, export_dir,
+                                   {kSavedModelTagServe}, &bundle);
   EXPECT_FALSE(st.ok());
-  EXPECT_TRUE(absl::StrContains(st.error_message(), kInvalidTarget))
-      << st.error_message();
+  EXPECT_TRUE(absl::StrContains(st.message(), kInvalidTarget)) << st.message();
 }
 
 TEST_F(LoaderTest, PbtxtFormat) {
@@ -229,8 +228,8 @@ TEST_F(LoaderTest, InvalidExportPath) {
 
   const string export_dir =
       io::JoinPath(testing::TensorFlowSrcRoot(), "missing-path");
-  Status st = LoadSavedModel(session_options, run_options, export_dir,
-                             {kSavedModelTagServe}, &bundle);
+  absl::Status st = LoadSavedModel(session_options, run_options, export_dir,
+                                   {kSavedModelTagServe}, &bundle);
   EXPECT_FALSE(st.ok());
 }
 

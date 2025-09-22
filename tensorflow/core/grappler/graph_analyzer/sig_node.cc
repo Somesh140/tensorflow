@@ -16,8 +16,17 @@ limitations under the License.
 #include "tensorflow/core/grappler/graph_analyzer/sig_node.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <ios>
+#include <map>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_format.h"
+#include "tensorflow/core/framework/node_def.pb.h"
 
 namespace tensorflow {
 namespace grappler {
@@ -220,10 +229,10 @@ string Signature::ToString() const {
   return result;
 }
 
-Status Signature::Compute() {
+absl::Status Signature::Compute() {
   if (map.size() > kMaxGraphSize) {
-    return Status(
-        error::INVALID_ARGUMENT,
+    return absl::Status(
+        absl::StatusCode::kInvalidArgument,
         absl::StrFormat(
             "A graph of %d nodes is too big for signature computation, "
             "the maximal supported node count is %d.",
@@ -248,7 +257,7 @@ Status Signature::Compute() {
 
   OrderLinks();
 
-  return Status::OK();
+  return absl::OkStatus();
 }
 
 void Signature::PrepareNodes() {

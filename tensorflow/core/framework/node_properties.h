@@ -36,35 +36,27 @@ struct NodeProperties {
 
   NodeProperties(const OpDef* _op_def, NodeDef&& _node_def,
                  DataTypeVector inputs, DataTypeVector outputs)
-      : NodeProperties(_op_def, std::move(_node_def), inputs, outputs,
-                       nullptr) {}
-
-  NodeProperties(const OpDef* _op_def, NodeDef&& _node_def,
-                 DataTypeVector inputs, DataTypeVector outputs,
-                 ForwardTypeInferenceFn fwd_type_fn)
-      : op_def(_op_def),
-        node_def(std::move(_node_def)),
+      : output_types(std::move(outputs)),
         input_types(std::move(inputs)),
-        input_types_slice(input_types),
-        output_types(std::move(outputs)),
         output_types_slice(output_types),
-        fwd_type_fn(fwd_type_fn) {}
+        input_types_slice(input_types),
+        node_def(std::move(_node_def)),
+        op_def(_op_def) {}
 
   // Resets the 'props' shared pointer to point to a new NodeProperties created
   // from the given NodeDef. 'op_registry' is used to look up the OpDef
   // corresponding to node_def.op(). Returns an error if OpDef lookup or
   // creation failed.
-  static Status CreateFromNodeDef(NodeDef node_def,
-                                  const OpRegistryInterface* op_registry,
-                                  std::shared_ptr<const NodeProperties>* props);
+  static absl::Status CreateFromNodeDef(
+      NodeDef node_def, const OpRegistryInterface* op_registry,
+      std::shared_ptr<const NodeProperties>* props);
 
-  const OpDef* op_def;  // not owned.
-  NodeDef node_def;
-  DataTypeVector input_types;
-  DataTypeSlice input_types_slice;
   DataTypeVector output_types;
+  DataTypeVector input_types;
   DataTypeSlice output_types_slice;
-  ForwardTypeInferenceFn fwd_type_fn;
+  DataTypeSlice input_types_slice;
+  NodeDef node_def;
+  const OpDef* op_def;  // not owned.
 };
 
 }  // namespace tensorflow

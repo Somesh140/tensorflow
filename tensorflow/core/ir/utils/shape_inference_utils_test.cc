@@ -12,17 +12,32 @@ limitations under the License.
 
 #include "tensorflow/core/ir/utils/shape_inference_utils.h"
 
+#include <cassert>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "llvm/ADT/STLExtras.h"
+#include "mlir/IR/Attributes.h"  // from @llvm-project
+#include "mlir/IR/Block.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
-#include "mlir/Parser.h"  // from @llvm-project
+#include "mlir/IR/OwningOpRef.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/Interfaces/InferTypeOpInterface.h"  // from @llvm-project
+#include "mlir/Parser/Parser.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/ir/dialect.h"
 #include "tensorflow/core/ir/ops.h"
 #include "tensorflow/core/ir/tf_op_wrapper.h"
+#include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/test.h"
 
 using tensorflow::shape_inference::DimensionHandle;
@@ -35,7 +50,7 @@ namespace {
 // These operations cover the most of logics used in the
 // InferReturnTypeComponentsForTFOp.
 const char *const code = R"mlir(
-  tfg.func @test(%arg : tensor<32x?x256x4xi32> {tfg.name = "arg"}) -> (tensor<2x2xf32>) {
+  tfg.func @test(%arg : tensor<32x?x256x4xi32> {tfg.name = "arg"}, %arg_1 : tensor<*xi32> {tfg.name = "arg1", tf._output_shapes = [5 : i32]}) -> (tensor<2x2xf32>) {
     %Placeholder, %ctl = Placeholder name("placeholder") {dtype = f32, shape = #tf_type.shape<>} : () -> (tensor<f32>)
     %Const, %ctl_0 = Const name("c0") {dtype = f32, value = dense<1.000000e+00> : tensor<2x2xf32>} : () -> (tensor<2x2xf32>)
     %Const_1, %ctl_2 = Const name("c1") {dtype = f32, value = dense<2.000000e+00> : tensor<2x2xf32>} : () -> (tensor<2x2xf32>)
@@ -54,6 +69,7 @@ const char *const code = R"mlir(
     %Const_7, %ctl_17 = Const name("index") {dtype = i32, value = dense<0> : tensor<i32>} : () -> (tensor<i32>)
     %Const_8, %ctl_18 = Const name("item") {dtype = f32, value = dense<[[1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00]]> : tensor<2x2xf32>} : () -> (tensor<2x2xf32>)
     %TensorListSetItem, %ctl_19 = TensorListSetItem(%TensorListReserve, %Const_7, %Const_8) name("TensorListSetItem") {element_dtype = f32} : (tensor<!tf_type.variant<tensor<2x2xf32>>>, tensor<i32>, tensor<2x2xf32>) -> (tensor<!tf_type.variant<tensor<2x2xf32>>>)
+    %Identity_1, %ctl_20 = Identity(%arg_1) name("id2") {T = i32} : (tensor<*xi32>) -> (tensor<*xi32>)
     return (%Const_1) : tensor<2x2xf32>
   }
 )mlir";
@@ -65,7 +81,7 @@ class ShapeInferenceTest : public ::testing::Test {
 
   ShapeInferenceTest() {
     context_.getOrLoadDialect<tfg::TFGraphDialect>();
-    module_ = mlir::parseSourceString(code, &context_);
+    module_ = mlir::parseSourceString<mlir::ModuleOp>(code, &context_);
     assert(module_);
   }
 
@@ -81,7 +97,7 @@ class ShapeInferenceTest : public ::testing::Test {
 
       EXPECT_EQ(op.getNumResults() - 1, info.size());
       for (int i = 0; i < op.getNumResults() - 1; ++i) {
-        ShapedType shape = op.getResultTypes()[i].cast<ShapedType>();
+        ShapedType shape = mlir::cast<ShapedType>(op.getResultTypes()[i]);
         EXPECT_EQ(shape.hasRank(), info[i].hasRank());
         if (shape.hasRank()) EXPECT_EQ(shape.getShape(), info[i].getDims());
         if (check_type)
@@ -113,7 +129,7 @@ TEST_F(ShapeInferenceTest, TestShapeAndTypeInference) {
   // `value` attr contains the tensor information and it's a DenseElementAttr.
   auto op_result_as_shape_fn = [](InferenceContext &ic,
                                   OpResult op_result) -> ShapeHandle {
-    auto rt = op_result.getType().dyn_cast<RankedTensorType>();
+    auto rt = mlir::dyn_cast<RankedTensorType>(op_result.getType());
     if (!rt || rt.getRank() != 1 || !rt.hasStaticShape()) return {};
 
     std::vector<DimensionHandle> dims(rt.getDimSize(0), ic.UnknownDim());
@@ -126,7 +142,7 @@ TEST_F(ShapeInferenceTest, TestShapeAndTypeInference) {
 
   GraphFuncOp func = GetModule().lookupSymbol<GraphFuncOp>("test");
   ASSERT_TRUE(func);
-  Block &block = *func.body().begin();
+  Block &block = *func.getBody().begin();
 
   SmallVector<SmallVector<ShapedTypeComponents>> all_results;
 
@@ -135,7 +151,8 @@ TEST_F(ShapeInferenceTest, TestShapeAndTypeInference) {
     // `InferReturnTypeComponentsForTFOp`uses this callback to get the type
     // information.
     auto result_element_type_fn = [&](int idx) -> Type {
-      return op.getResult(idx).getType().cast<ShapedType>().getElementType();
+      return mlir::cast<ShapedType>(op.getResult(idx).getType())
+          .getElementType();
     };
 
     // We use TFG operation so that we don't need to provide
@@ -151,7 +168,8 @@ TEST_F(ShapeInferenceTest, TestShapeAndTypeInference) {
     all_results.push_back(results);
   }
 
-  VerifyInferredShapes(func.body().begin()->without_terminator(), all_results,
+  VerifyInferredShapes(func.getBody().begin()->without_terminator(),
+                       all_results,
                        /*check_type*/ true);
 
   // In general, `operand_as_constant_fn` and `op_result_as_shape_fn` may have
@@ -176,7 +194,8 @@ TEST_F(ShapeInferenceTest, TestShapeAndTypeInference) {
   all_results.clear();
   for (Operation &op : block.without_terminator()) {
     auto result_element_type_fn = [&](int idx) -> Type {
-      return op.getResult(idx).getType().cast<ShapedType>().getElementType();
+      return mlir::cast<ShapedType>(op.getResult(idx).getType())
+          .getElementType();
     };
 
     SmallVector<ShapedTypeComponents> results;
@@ -190,7 +209,8 @@ TEST_F(ShapeInferenceTest, TestShapeAndTypeInference) {
     all_results.push_back(results);
   }
 
-  VerifyInferredShapes(func.body().begin()->without_terminator(), all_results,
+  VerifyInferredShapes(func.getBody().begin()->without_terminator(),
+                       all_results,
                        /*check_type*/ true);
 }
 
@@ -208,7 +228,7 @@ TEST_F(ShapeInferenceTest, TestInferenceFailure) {
 
   GraphFuncOp func = GetModule().lookupSymbol<GraphFuncOp>("test");
   ASSERT_TRUE(func);
-  Block &block = *func.body().begin();
+  Block &block = *func.getBody().begin();
 
   SmallVector<SmallVector<ShapedTypeComponents>> all_results;
 
@@ -217,7 +237,7 @@ TEST_F(ShapeInferenceTest, TestInferenceFailure) {
   // "value" attribute.
   auto get_empty_attr_values_fn =
       [](Operation *, llvm::StringRef, const tensorflow::OpRegistrationData *,
-         bool, tensorflow::AttrValueMap *) { return tensorflow::Status::OK(); };
+         bool, tensorflow::AttrValueMap *) { return absl::OkStatus(); };
 
   for (Operation &op : block.without_terminator()) {
     SmallVector<ShapedTypeComponents> results;

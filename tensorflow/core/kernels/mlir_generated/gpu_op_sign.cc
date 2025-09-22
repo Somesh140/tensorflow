@@ -13,7 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+#include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/kernels/mlir_generated/base_gpu_op.h"
 
 namespace tensorflow {
@@ -27,9 +28,7 @@ GENERATE_AND_REGISTER_UNARY_GPU_KERNEL(Sign, DT_COMPLEX64);
 GENERATE_AND_REGISTER_UNARY_GPU_KERNEL(Sign, DT_COMPLEX128);
 
 // These kernels are JIT-compiled.
-#if defined(MLIR_GENERATED_EXPERIMENTAL_KERNELS_ENABLED)
 GENERATE_AND_REGISTER_UNARY_JIT_GPU_KERNEL(Sign, DT_INT8);
 GENERATE_AND_REGISTER_UNARY_JIT_GPU_KERNEL(Sign, DT_INT16);
-#endif
 
 }  // namespace tensorflow

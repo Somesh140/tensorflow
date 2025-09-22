@@ -1,8 +1,10 @@
-load("//tensorflow:tensorflow.bzl", "get_compatible_with_cloud")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//tensorflow:tensorflow.default.bzl", "get_compatible_with_portable")
 load("//tensorflow/compiler/mlir:glob_lit_test.bzl", "glob_lit_tests")
 
 package(
-    default_compatible_with = get_compatible_with_cloud(),
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    default_compatible_with = get_compatible_with_portable(),
     default_visibility = [
         "//tensorflow/core:__subpackages__",
     ],
@@ -14,10 +16,10 @@ cc_library(
     srcs = ["graph_to_func.cc"],
     hdrs = ["graph_to_func.h"],
     deps = [
-        "//tensorflow/core:core_cpu_base",
         "//tensorflow/core/ir:Dialect",
         "//tensorflow/core/platform:errors",
         "//tensorflow/core/platform:status",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
@@ -27,12 +29,12 @@ cc_library(
 
 cc_library(
     name = "Pass",
-    srcs = ["graph_to_func_pass.cc"],
-    hdrs = ["graph_to_func_pass.h"],
+    srcs = ["pass.cc"],
+    hdrs = ["pass.h"],
     deps = [
         ":GraphToFunc",
         "//tensorflow/core/ir:Dialect",
-        "//tensorflow/core/transforms:PassDetail",
+        "//tensorflow/core/transforms:PassIncGen",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",
@@ -40,6 +42,7 @@ cc_library(
 )
 
 glob_lit_tests(
+    name = "all_tests",
     data = ["//tensorflow/core/transforms:test_utilities"],
     driver = "@llvm-project//mlir:run_lit.sh",
     exclude = [],

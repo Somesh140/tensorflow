@@ -12,22 +12,25 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-#include <iostream>
+#include <cstdint>
+#include <memory>
+#include <utility>
 
-#include "mlir/Dialect/StandardOps/IR/Ops.h"  // from @llvm-project
+#include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
+#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
 #include "mlir/Transforms/Passes.h"  // from @llvm-project
-#include "tensorflow/compiler/mlir/lite/utils/validators.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/passes_detail.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/verification_utils.h"
+#include "tensorflow/compiler/mlir/utils/validators.h"  // IWYU pragma: keep
 
 namespace mlir {
 namespace TF {
@@ -39,7 +42,7 @@ namespace {
 TF::ConstOp GetI64ConstantTensor(PatternRewriter &rewriter,
                                  ArrayRef<int64_t> values, Location location) {
   auto cst_attr = rewriter.getI64TensorAttr(values);
-  return rewriter.create<TF::ConstOp>(location, cst_attr.getType(), cst_attr);
+  return TF::ConstOp::create(rewriter, location, cst_attr.getType(), cst_attr);
 }
 
 // Rewrites broadcast->reshape to a reshape->broadcast that reduces
@@ -50,20 +53,21 @@ class SimplifyBroadcastReshape : public OpRewritePattern<BroadcastToOp> {
   LogicalResult matchAndRewrite(BroadcastToOp op,
                                 PatternRewriter &rewriter) const override {
     // Only rewrite if the Broadcast has only one consumer.
-    if (!op.output().hasOneUse()) return failure();
+    if (!op.getOutput().hasOneUse()) return failure();
 
-    Operation *user = *op.output().getUsers().begin();
+    Operation *user = *op.getOutput().getUsers().begin();
 
     auto reshape_op = llvm::dyn_cast_or_null<ReshapeOp>(user);
     if (!reshape_op) return failure();
 
-    auto reshape_type = reshape_op.output().getType().cast<ShapedType>();
+    auto reshape_type =
+        mlir::cast<ShapedType>(reshape_op.getOutput().getType());
 
     if (!reshape_type.hasStaticShape()) return failure();
     ArrayRef<int64_t> reshape_shape = reshape_type.getShape();
 
-    auto input_type = op.input().getType().cast<ShapedType>();
-    auto output_type = op.output().getType().cast<ShapedType>();
+    auto input_type = mlir::cast<ShapedType>(op.getInput().getType());
+    auto output_type = mlir::cast<ShapedType>(op.getOutput().getType());
 
     if (!input_type.hasRank() || !output_type.hasRank()) return failure();
 
@@ -119,20 +123,23 @@ class SimplifyBroadcastReshape : public OpRewritePattern<BroadcastToOp> {
         rewriter, ArrayRef<int64_t>(new_reshape_dims), op.getLoc());
     auto new_reshape_type = RankedTensorType::get(new_reshape_dims, el_ty);
     ReshapeOp new_reshape =
-        rewriter.create<ReshapeOp>(new_reshape_shape.getLoc(), new_reshape_type,
-                                   op.input(), new_reshape_shape);
+        ReshapeOp::create(rewriter, new_reshape_shape.getLoc(),
+                          new_reshape_type, op.getInput(), new_reshape_shape);
     TF::ConstOp new_broadcast_shape =
         GetI64ConstantTensor(rewriter, reshape_shape, op.getLoc());
     rewriter.replaceOpWithNewOp<BroadcastToOp>(
-        reshape_op, reshape_op.output().getType(), new_reshape,
+        reshape_op, reshape_op.getOutput().getType(), new_reshape,
         new_broadcast_shape);
     return success();
   }
 };
 
+#define GEN_PASS_DEF_TENSORFLOWOPTIMIZEPASS
+#include "tensorflow/compiler/mlir/tensorflow/transforms/tf_passes.h.inc"
+
 // Canonicalize operations in functions.
 struct TensorFlowOptimizePass
-    : public TensorFlowOptimizePassBase<TensorFlowOptimizePass> {
+    : public impl::TensorFlowOptimizePassBase<TensorFlowOptimizePass> {
   LogicalResult initialize(MLIRContext *context) override {
     RewritePatternSet pattern_list(context);
     populateWithGenerated(pattern_list);
@@ -143,8 +150,7 @@ struct TensorFlowOptimizePass
 
   void runOnOperation() override {
     auto func = getOperation();
-    if (failed(applyPatternsAndFoldGreedily(func, patterns)))
-      signalPassFailure();
+    if (failed(applyPatternsGreedily(func, patterns))) signalPassFailure();
   }
 
   FrozenRewritePatternSet patterns;
@@ -154,7 +160,7 @@ struct TensorFlowOptimizePass
 
 void CreateTFStandardPipeline(OpPassManager &pm,
                               const StandardPipelineOptions &options) {
-  OpPassManager &func_pm = pm.nest<FuncOp>();
+  OpPassManager &func_pm = pm.nest<func::FuncOp>();
 
   // First operates on the executor dialect:
   // - remove dead islands.
@@ -163,22 +169,22 @@ void CreateTFStandardPipeline(OpPassManager &pm,
   func_pm.addPass(tf_executor::CreateTFExecutorGraphPruningPass());
   func_pm.addPass(tf_executor::CreateTFExecutorIslandCoarseningPass());
   func_pm.addPass(CreateMaterializePassthroughOpPass());
-  if (options.form_clusters)
-    func_pm.addPass(TFDevice::CreateClusterFormationPass());
+  if (options.form_clusters) pm.addPass(TFDevice::CreateClusterFormationPass());
 
   // Hopefully there is a single island left, or there wasn't any to begin with.
   // We now run the optimizer which operates mostly inside islands.
   func_pm.addPass(createCanonicalizerPass());
-  pm.addPass(CreateTFShapeInferencePass());
+  pm.addPass(CreateTFShapeInferencePass(
+      {}, options.enable_stablehlo_shape_propagation));
   if (options.enable_inliner) {
     pm.addPass(createInlinerPass());
   }
   pm.addPass(createSymbolDCEPass());
-  pm.addNestedPass<FuncOp>(CreateTFOptimizePass());
-  pm.addNestedPass<FuncOp>(createCSEPass());
+  pm.addNestedPass<func::FuncOp>(CreateTFOptimizePass());
+  pm.addNestedPass<func::FuncOp>(createCSEPass());
 }
 
-std::unique_ptr<OperationPass<FuncOp>> CreateTFOptimizePass() {
+std::unique_ptr<OperationPass<func::FuncOp>> CreateTFOptimizePass() {
   return std::make_unique<TensorFlowOptimizePass>();
 }
 

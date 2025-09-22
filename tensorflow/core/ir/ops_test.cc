@@ -15,11 +15,13 @@ limitations under the License.
 
 #include "tensorflow/core/ir/ops.h"
 
+#include <cassert>
+
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/Interfaces/ControlFlowInterfaces.h"  // from @llvm-project
-#include "mlir/Parser.h"  // from @llvm-project
+#include "mlir/Parser/Parser.h"  // from @llvm-project
 #include "tensorflow/core/ir/dialect.h"
 #include "tensorflow/core/platform/test.h"
 
@@ -49,29 +51,27 @@ TEST(TestTFGRegionOps, TestIfLikeRegionOpSuccessorRegions) {
         yield(%arg1) : tensor<f32>
       } else {
         yield(%arg1) : tensor<f32>
-      } {Tcond = i1, Tout = [f32], output_shapes = [#tf_type.shape<>],
-         then_attrs = {}, else_attrs = {}}
-      : (tensor<i1>) -> (tensor<f32>)
+      } : (tensor<i1>) -> (tensor<f32>)
       return(%IfRegion) : tensor<f32>
     }
   )mlir";
   MLIRContext context;
   context.getOrLoadDialect<TFGraphDialect>();
-  OwningOpRef<ModuleOp> module = mlir::parseSourceString(code, &context);
+  OwningOpRef<ModuleOp> module =
+      mlir::parseSourceString<mlir::ModuleOp>(code, &context);
   ASSERT_TRUE(module);
   auto op = findOp<IfRegionOp>(*module);
 
   // Test region -> parent
   SmallVector<RegionSuccessor> regions;
   for (unsigned index = 0; index <= 1; ++index, regions.clear()) {
-    op.getSuccessorRegions(index, /*operands=*/{Attribute()}, regions);
+    op.getSuccessorRegions(op->getRegion(index), regions);
     ASSERT_EQ(regions.size(), 1u);
     EXPECT_TRUE(regions.front().isParent());
   }
 
   // Test parent -> regions
-  op.getSuccessorRegions(/*index=*/llvm::None, /*operands=*/{Attribute()},
-                         regions);
+  op.getSuccessorRegions(RegionBranchPoint::parent(), regions);
   EXPECT_EQ(regions.size(), 2u);
   regions.clear();
 
@@ -79,9 +79,9 @@ TEST(TestTFGRegionOps, TestIfLikeRegionOpSuccessorRegions) {
   Builder b(&context);
   ShapedType tensor_type = RankedTensorType::get(/*shape=*/{}, b.getI1Type());
   Attribute cond = DenseElementsAttr::get(tensor_type, /*value=*/true);
-  op.getSuccessorRegions(/*index=*/llvm::None, /*operands=*/{cond}, regions);
+  op.getEntrySuccessorRegions(/*operands=*/{cond}, regions);
   ASSERT_EQ(regions.size(), 1u);
-  EXPECT_EQ(regions.front().getSuccessor(), &op.then_region());
+  EXPECT_EQ(regions.front().getSuccessor(), &op.getThenRegion());
 }
 
 TEST(TestTFGRegionOps, TestCaseLikeRegionOpSuccessorRegions) {
@@ -91,14 +91,14 @@ TEST(TestTFGRegionOps, TestCaseLikeRegionOpSuccessorRegions) {
         yield(%arg1) : tensor<f32>
       }, {
         yield(%arg1) : tensor<f32>
-      } {Tout = [f32], output_shapes = [#tf_type.shape<>], branch_attrs = [{}, {}]}
-      : (tensor<i32>) -> (tensor<f32>)
+      } : (tensor<i32>) -> (tensor<f32>)
       return(%CaseRegion) : tensor<f32>
     }
   )mlir";
   MLIRContext context;
   context.getOrLoadDialect<TFGraphDialect>();
-  OwningOpRef<ModuleOp> module = mlir::parseSourceString(code, &context);
+  OwningOpRef<ModuleOp> module =
+      mlir::parseSourceString<mlir::ModuleOp>(code, &context);
   ASSERT_TRUE(module);
   auto op = findOp<CaseRegionOp>(*module);
 
@@ -106,14 +106,13 @@ TEST(TestTFGRegionOps, TestCaseLikeRegionOpSuccessorRegions) {
   SmallVector<RegionSuccessor> regions;
   for (unsigned index = 0; index < op.getNumRegions();
        ++index, regions.clear()) {
-    op.getSuccessorRegions(index, /*operands=*/{Attribute()}, regions);
+    op.getSuccessorRegions(op->getRegion(index), regions);
     ASSERT_EQ(regions.size(), 1u);
     EXPECT_TRUE(regions.front().isParent());
   }
 
   // Test parent -> region
-  op.getSuccessorRegions(/*index=*/llvm::None, /*operands=*/{Attribute()},
-                         regions);
+  op.getSuccessorRegions(RegionBranchPoint::parent(), regions);
   EXPECT_EQ(regions.size(), 2u);
   regions.clear();
 
@@ -121,9 +120,9 @@ TEST(TestTFGRegionOps, TestCaseLikeRegionOpSuccessorRegions) {
   Builder b(&context);
   ShapedType tensor_type = RankedTensorType::get(/*shape=*/{}, b.getI32Type());
   Attribute branch = DenseElementsAttr::get(tensor_type, /*value=*/1);
-  op.getSuccessorRegions(/*index=*/llvm::None, {branch}, regions);
+  op.getEntrySuccessorRegions({branch}, regions);
   ASSERT_EQ(regions.size(), 1u);
-  EXPECT_EQ(regions.front().getSuccessor(), &op.branches()[1]);
+  EXPECT_EQ(regions.front().getSuccessor(), &op.getBranches()[1]);
 }
 
 TEST(TestTFGRegionOps, TestWhileLikeRegionOpSuccessorRegions) {
@@ -136,36 +135,34 @@ TEST(TestTFGRegionOps, TestWhileLikeRegionOpSuccessorRegions) {
       } do {
       ^bb0(%arg1: tensor<f32>, %arg2: !tf_type.control):
         yield(%arg1) : tensor<f32>
-      } {T = [f32], body_attrs = {}, cond_attrs = {},
-         output_shapes = [#tf_type.shape<>], parallel_iterations = 10 : i64}
-      : tensor<f32>
+      } {parallel_iterations = 10 : i64} : (tensor<f32>) -> (tensor<f32>)
       return(%WhileRegion) : tensor<f32>
     }
   )mlir";
   MLIRContext context;
   context.getOrLoadDialect<TFGraphDialect>();
-  OwningOpRef<ModuleOp> module = mlir::parseSourceString(code, &context);
+  OwningOpRef<ModuleOp> module =
+      mlir::parseSourceString<mlir::ModuleOp>(code, &context);
   ASSERT_TRUE(module);
   auto op = findOp<WhileRegionOp>(*module);
 
   // Test parent -> cond
   SmallVector<RegionSuccessor> regions;
-  op.getSuccessorRegions(/*index=*/llvm::None, /*operands=*/{Attribute()},
-                         regions);
+  op.getSuccessorRegions(RegionBranchPoint::parent(), regions);
   ASSERT_EQ(regions.size(), 1u);
-  EXPECT_EQ(regions.front().getSuccessor(), &op.cond_region());
+  EXPECT_EQ(regions.front().getSuccessor(), &op.getCondRegion());
   regions.clear();
 
   // Test cond -> parent or body
-  op.getSuccessorRegions(/*index=*/0, /*operands=*/{Attribute()}, regions);
+  op.getSuccessorRegions(op.getRegion(0), regions);
   ASSERT_EQ(regions.size(), 2u);
   EXPECT_TRUE(regions.front().isParent() ^ regions.back().isParent());
   regions.clear();
 
   // Test body -> cond
-  op.getSuccessorRegions(/*index=*/1, /*operands=*/{Attribute()}, regions);
+  op.getSuccessorRegions(op.getRegion(1), regions);
   ASSERT_EQ(regions.size(), 1u);
-  EXPECT_EQ(regions.front().getSuccessor(), &op.cond_region());
+  EXPECT_EQ(regions.front().getSuccessor(), &op.getCondRegion());
   regions.clear();
 }
 
@@ -176,26 +173,25 @@ TEST(TestTFGRegionOps, TestForLikeRegionOpSuccessorRegions) {
         ^bb0(%arg2: tensor<i32>, %arg3: tensor<f32>,
              %arg4: !tf_type.control, %arg5: !tf_type.control):
         yield(%arg3) : tensor<f32>
-      } {T = [f32], body_attrs = {}, output_shapes = [#tf_type.shape<>]}
-      : tensor<f32>
+      } : (tensor<i32>, tensor<i32>, tensor<i32>, tensor<f32>) -> (tensor<f32>)
       return(%ForRegion) : tensor<f32>
     }
   )mlir";
   MLIRContext context;
   context.getOrLoadDialect<TFGraphDialect>();
-  OwningOpRef<ModuleOp> module = mlir::parseSourceString(code, &context);
+  OwningOpRef<ModuleOp> module =
+      mlir::parseSourceString<mlir::ModuleOp>(code, &context);
   ASSERT_TRUE(module);
   auto op = findOp<ForRegionOp>(*module);
 
   // Test parent -> body
   SmallVector<RegionSuccessor> regions;
-  op.getSuccessorRegions(/*index=*/llvm::None, /*operands=*/{Attribute()},
-                         regions);
+  op.getSuccessorRegions(RegionBranchPoint::parent(), regions);
   EXPECT_EQ(regions.size(), 1u);
   regions.clear();
 
   // Test body -> body or parent
-  op.getSuccessorRegions(/*index=*/0, /*operands=*/{Attribute()}, regions);
+  op.getSuccessorRegions(op.getRegion(), regions);
   ASSERT_EQ(regions.size(), 2u);
   EXPECT_TRUE(regions.front().isParent() ^ regions.back().isParent());
 }

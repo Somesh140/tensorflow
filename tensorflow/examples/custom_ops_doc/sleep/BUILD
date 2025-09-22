@@ -1,8 +1,8 @@
 # (non-blocking) op using AsyncOpKernel
 
-load("//tensorflow:tensorflow.bzl", "py_strict_binary", "py_strict_library")
+load("//tensorflow:strict.default.bzl", "py_strict_binary", "py_strict_library")
 load("//tensorflow:tensorflow.bzl", "tf_custom_op_library")
-load("//tensorflow:tensorflow.bzl", "tf_py_test")
+load("//tensorflow:tensorflow.default.bzl", "tf_py_test")
 
 licenses(["notice"])
 
@@ -13,6 +13,8 @@ tf_custom_op_library(
         "sleep_op.cc",
     ],
     deps = [
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/time",
     ],
 )
@@ -45,7 +47,6 @@ tf_py_test(
     srcs_version = "PY3",
     tags = [
         "no_mac",  # TODO(b/216321151): Re-enable this test.
-        "no_pip",
     ],
     deps = [
         ":sleep_op",

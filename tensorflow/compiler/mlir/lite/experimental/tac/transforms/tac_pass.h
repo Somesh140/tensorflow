@@ -15,6 +15,10 @@ limitations under the License.
 #ifndef TENSORFLOW_COMPILER_MLIR_LITE_EXPERIMENTAL_TAC_TRANSFORMS_TAC_PASS_H_
 #define TENSORFLOW_COMPILER_MLIR_LITE_EXPERIMENTAL_TAC_TRANSFORMS_TAC_PASS_H_
 
+#include <memory>
+#include <string>
+
+#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/experimental/tac/hardwares/target_hardware.h"
 #include "tensorflow/compiler/mlir/lite/experimental/tac/tac_module.h"
@@ -36,9 +40,10 @@ class TacPass : public OperationPass<T> {
       : OperationPass<T>::OperationPass(mlir::TypeID::get<T>()),
         module_(module) {}
 
-  ~TacPass() override {}
+  ~TacPass() override = default;
 
-  const TargetHardware* GetTargetHardware(const std::string& hardware_name) {
+  const TargetHardware* GetTargetHardware(
+      const std::string& hardware_name) const {
     return module_ != nullptr
                ? module_->GetTargetHardware(hardware_name)
                : mlir::TFL::tac::GetTargetHardware(hardware_name);
@@ -54,13 +59,13 @@ class TacPass : public OperationPass<T> {
 // When adding new Pass to TAC, users should use this class as the base class
 // as it provides access to the TAC module.
 template <typename T>
-class TacFunctionPass : public TacPass<FuncOp> {
+class TacFunctionPass : public TacPass<func::FuncOp> {
  public:
-  using TacPass<FuncOp>::TacPass;
+  using TacPass<func::FuncOp>::TacPass;
 
-  ~TacFunctionPass() override {}
+  ~TacFunctionPass() override = default;
 
-  mlir::FuncOp getFunction() { return getOperation(); }
+  mlir::func::FuncOp getFunction() { return getOperation(); }
 
   virtual void runOnFunction() = 0;
 

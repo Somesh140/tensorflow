@@ -2,12 +2,15 @@
 #   TensorFlow camera demo app for Android.
 
 load("@build_bazel_rules_android//android:rules.bzl", "android_binary")
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load(
     "//tensorflow:tensorflow.bzl",
     "tf_copts",
 )
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = ["//visibility:public"],
     licenses = ["notice"],
 )
@@ -73,6 +76,7 @@ android_binary(
     assets_dir = "",
     custom_package = "org.tensorflow.demo",
     manifest = "AndroidManifest.xml",
+    multidex = "native",
     resource_files = glob(["res/**"]),
     tags = [
         "manual",

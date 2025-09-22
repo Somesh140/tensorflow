@@ -42,36 +42,65 @@ limitations under the License.
 // TODO(phawkins): improve tests for:
 // * StridedSliceGrad (need to use shape function to compute sensible inputs)
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <initializer_list>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <numeric>
+#include <optional>
 #include <random>
-#include <unordered_map>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/container/fixed_array.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "tensorflow/compiler/jit/defs.h"
 #include "tensorflow/compiler/jit/flags.h"
-#include "tensorflow/compiler/tf2xla/type_util.h"
-#include "tensorflow/core/common_runtime/device.h"
-#include "tensorflow/core/common_runtime/device_factory.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/status.h"
+#include "xla/xla_data.pb.h"
 #include "tensorflow/core/common_runtime/device_mgr.h"
-#include "tensorflow/core/common_runtime/graph_constructor.h"
+#include "tensorflow/core/framework/device.h"
+#include "tensorflow/core/framework/device_factory.h"
 #include "tensorflow/core/framework/kernel_shape_util.h"
+#include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/framework/node_def_builder.h"
 #include "tensorflow/core/framework/node_def_util.h"
+#include "tensorflow/core/framework/numeric_types.h"
+#include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/tensor_testutil.h"
+#include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/graph/graph.h"
 #include "tensorflow/core/lib/core/status.h"
-#include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/bfloat16.h"
+#include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/protobuf/config.pb.h"
 #include "tensorflow/core/public/session.h"
 #include "tensorflow/core/public/session_options.h"
 #include "tensorflow/core/util/command_line_flags.h"
 #include "tensorflow/core/util/device_name_utils.h"
+#include "tensorflow/core/util/padding.h"
 #include "tensorflow/core/util/tensor_format.h"
 
 namespace tensorflow {
@@ -132,10 +161,10 @@ class OpTestBuilder {
   // sets it to the NodeDef of the operator under test. Fills 'inputs' and
   // 'outputs' with the names of the input placeholder nodes and the output
   // identity nodes, respectively.
-  Status BuildGraph(const string& name_prefix, const string& device,
-                    bool use_jit, GraphDef* graphdef, NodeDef** test_node_def,
-                    std::vector<string>* inputs,
-                    std::vector<string>* outputs) const;
+  absl::Status BuildGraph(const string& name_prefix, const string& device,
+                          bool use_jit, GraphDef* graphdef,
+                          NodeDef** test_node_def, std::vector<string>* inputs,
+                          std::vector<string>* outputs) const;
 
   struct InputDescription {
     Tensor tensor;
@@ -218,11 +247,12 @@ OpTestBuilder& OpTestBuilder::Attr(absl::string_view attr_name,
   return *this;
 }
 
-Status OpTestBuilder::BuildGraph(const string& name_prefix,
-                                 const string& device, bool use_jit,
-                                 GraphDef* graphdef, NodeDef** test_node_def,
-                                 std::vector<string>* inputs,
-                                 std::vector<string>* outputs) const {
+absl::Status OpTestBuilder::BuildGraph(const string& name_prefix,
+                                       const string& device, bool use_jit,
+                                       GraphDef* graphdef,
+                                       NodeDef** test_node_def,
+                                       std::vector<string>* inputs,
+                                       std::vector<string>* outputs) const {
   OpRegistryInterface* op_registry = OpRegistry::Global();
 
   const OpDef* op_def;
@@ -269,7 +299,7 @@ Status OpTestBuilder::BuildGraph(const string& name_prefix,
     *test_node_def = test_def;
   }
 
-  return Status::OK();
+  return absl::OkStatus();
 }
 
 // Test fixture. The fixture manages the random number generator and its seed,
@@ -503,13 +533,7 @@ OpTest::OpTest() {
              << ". To reproduce the "
                 "results of this test, pass flag --tf_xla_random_seed="
              << seed;
-  generator_.reset(new std::mt19937(seed));
-
-  // Create a session with an empty graph.
-  SessionOptions session_options;
-  session_.reset(NewSession(session_options));
-  GraphDef def;
-  TF_CHECK_OK(session_->Create(def));
+  generator_ = std::make_unique<std::mt19937>(seed);
 }
 
 namespace {
@@ -530,20 +554,20 @@ int64_t ShapeNumVals(absl::Span<const int64_t> shape) {
 }
 }  // namespace
 
-// TensorGenerator is an abstact class that has one implementing class for each
+// TensorGenerator is an abstract class that has one implementing class for each
 // (DataType,T) pair. The implementing class implements RandomVals, which is
 // the only Tensor generation code that is specific to the DataType.
 template <typename T>
 class TensorGenerator {
  public:
   explicit TensorGenerator(OpTest& test) : test_(test) {}
-  virtual ~TensorGenerator() {}
+  virtual ~TensorGenerator() = default;
   virtual DataType dtype() = 0;
-  virtual void RandomVals(absl::optional<T> lo, absl::optional<T> hi,
+  virtual void RandomVals(std::optional<T> lo, std::optional<T> hi,
                           bool needs_unique_values,
                           absl::FixedArray<T>& vals) = 0;
 
-  Tensor RandomTensor(absl::optional<T> lo, absl::optional<T> hi,
+  Tensor RandomTensor(std::optional<T> lo, std::optional<T> hi,
                       bool needs_unique_values,
                       absl::Span<const int64_t> shape) {
     absl::FixedArray<T> vals(ShapeNumVals(shape));
@@ -576,7 +600,7 @@ class TensorGeneratorFloat : public TensorGenerator<float> {
  public:
   explicit TensorGeneratorFloat(OpTest& test) : TensorGenerator(test) {}
   DataType dtype() override { return DT_FLOAT; }
-  void RandomVals(absl::optional<float> lo, absl::optional<float> hi,
+  void RandomVals(std::optional<float> lo, std::optional<float> hi,
                   bool needs_unique_values,
                   absl::FixedArray<float>& vals) override {
     absl::flat_hash_set<float> already_generated;
@@ -597,7 +621,7 @@ class TensorGeneratorDouble : public TensorGenerator<double> {
  public:
   explicit TensorGeneratorDouble(OpTest& test) : TensorGenerator(test) {}
   DataType dtype() override { return DT_DOUBLE; }
-  void RandomVals(absl::optional<double> lo, absl::optional<double> hi,
+  void RandomVals(std::optional<double> lo, std::optional<double> hi,
                   bool needs_unique_values,
                   absl::FixedArray<double>& vals) override {
     absl::flat_hash_set<double> already_generated;
@@ -618,7 +642,7 @@ class TensorGeneratorComplex64 : public TensorGenerator<complex64> {
  public:
   explicit TensorGeneratorComplex64(OpTest& test) : TensorGenerator(test) {}
   DataType dtype() override { return DT_COMPLEX64; }
-  void RandomVals(absl::optional<complex64> lo, absl::optional<complex64> hi,
+  void RandomVals(std::optional<complex64> lo, std::optional<complex64> hi,
                   bool needs_unique_values,
                   absl::FixedArray<complex64>& vals) override {
     absl::flat_hash_set<std::pair<float, float>> already_generated;
@@ -644,7 +668,7 @@ class TensorGeneratorInt32 : public TensorGenerator<int32> {
  public:
   explicit TensorGeneratorInt32(OpTest& test) : TensorGenerator(test) {}
   DataType dtype() override { return DT_INT32; }
-  void RandomVals(absl::optional<int32> lo, absl::optional<int32> hi,
+  void RandomVals(std::optional<int32> lo, std::optional<int32> hi,
                   bool needs_unique_values,
                   absl::FixedArray<int32>& vals) override {
     absl::flat_hash_set<int32> already_generated;
@@ -665,7 +689,7 @@ class TensorGeneratorInt64 : public TensorGenerator<int64> {
  public:
   explicit TensorGeneratorInt64(OpTest& test) : TensorGenerator(test) {}
   DataType dtype() override { return DT_INT64; }
-  void RandomVals(absl::optional<int64> lo, absl::optional<int64> hi,
+  void RandomVals(std::optional<int64> lo, std::optional<int64> hi,
                   bool needs_unique_values,
                   absl::FixedArray<int64>& vals) override {
     absl::flat_hash_set<int64_t> already_generated;
@@ -686,7 +710,7 @@ class TensorGeneratorBool : public TensorGenerator<bool> {
  public:
   explicit TensorGeneratorBool(OpTest& test) : TensorGenerator(test) {}
   DataType dtype() override { return DT_BOOL; }
-  void RandomVals(absl::optional<bool> lo, absl::optional<bool> hi,
+  void RandomVals(std::optional<bool> lo, std::optional<bool> hi,
                   bool needs_unique_values,
                   absl::FixedArray<bool>& vals) override {
     absl::flat_hash_set<bool> already_generated;
@@ -763,13 +787,15 @@ std::vector<int64_t> OpTest::RandomDims(int min_rank, int max_rank,
   std::uniform_int_distribution<int> rank_distribution(min_rank, max_rank);
   int rank = rank_distribution(generator());
   std::vector<int64_t> dims(rank);
-  // TODO(phawkins): too small a maximum tensor size could lead to an infinite
-  // loop here.
-  do {
-    std::generate(dims.begin(), dims.end(), [this, min_size, max_size]() {
-      return RandomDim(min_size, max_size);
-    });
-  } while (!TensorSizeIsOk(dims));
+  if (rank == 0) {
+    return dims;
+  }
+  int64_t per_dim_limit = std::pow(tf_xla_max_tensor_size, 1.0 / rank);
+  int64_t per_dim_max = std::min(max_size, per_dim_limit);
+  std::generate(dims.begin(), dims.end(), [this, min_size, per_dim_max]() {
+    return RandomDim(min_size, per_dim_max);
+  });
+  CHECK(TensorSizeIsOk(dims));  // Crash OK
   return dims;
 }
 
@@ -1237,7 +1263,7 @@ OpTest::WindowedSpatialDims OpTest::ChooseWindowedSpatialDims(
   d.output_dims.resize(num_spatial_dims);
   d.stride_dims.resize(num_spatial_dims);
   for (int i = 0; i < num_spatial_dims; ++i) {
-    Status s;
+    absl::Status s;
     // Repeatedly try different filter/stride sizes until we find a valid
     // combination.
     do {
@@ -1248,8 +1274,8 @@ OpTest::WindowedSpatialDims OpTest::ChooseWindowedSpatialDims(
           std::uniform_int_distribution<int>(1, d.kernel_dims[i])(generator());
       int64_t pad_dummy;
       s = GetWindowedOutputSize(d.input_dims[i], d.kernel_dims[i],
-                                d.stride_dims[i], d.padding, &d.output_dims[i],
-                                &pad_dummy);
+                                /*dilation_rate=*/1, d.stride_dims[i],
+                                d.padding, &d.output_dims[i], &pad_dummy);
     } while (!s.ok());
   }
   return d;
@@ -1365,8 +1391,8 @@ string Str<complex64>(complex64 x) {
 }
 
 template <typename T>
-Status TensorsAreCloseImpl(const Tensor& x, const Tensor& y, double atol,
-                           double rtol) {
+absl::Status TensorsAreCloseImpl(const Tensor& x, const Tensor& y, double atol,
+                                 double rtol) {
   auto Tx = x.flat<T>();
   auto Ty = y.flat<T>();
   for (int i = 0; i < Tx.size(); ++i) {
@@ -1378,11 +1404,11 @@ Status TensorsAreCloseImpl(const Tensor& x, const Tensor& y, double atol,
                        " rtol = ", rtol, " tol = ", atol + rtol * Abs(Tx(i))));
     }
   }
-  return Status::OK();
+  return absl::OkStatus();
 }
 
 template <typename T>
-Status TensorsAreEqualImpl(const Tensor& x, const Tensor& y) {
+absl::Status TensorsAreEqualImpl(const Tensor& x, const Tensor& y) {
   auto Tx = x.flat<T>();
   auto Ty = y.flat<T>();
   for (int i = 0; i < Tx.size(); ++i) {
@@ -1392,10 +1418,10 @@ Status TensorsAreEqualImpl(const Tensor& x, const Tensor& y) {
           Str(Ty(i)), ". x = ", x.DebugString(), "y = ", y.DebugString()));
     }
   }
-  return Status::OK();
+  return absl::OkStatus();
 }
 
-Status TensorsAreEqualImplBfloat16(const Tensor& x, const Tensor& y) {
+absl::Status TensorsAreEqualImplBfloat16(const Tensor& x, const Tensor& y) {
   auto Tx = x.flat<bfloat16>();
   auto Ty = y.flat<bfloat16>();
   for (int i = 0; i < Tx.size(); ++i) {
@@ -1406,15 +1432,15 @@ Status TensorsAreEqualImplBfloat16(const Tensor& x, const Tensor& y) {
           "y = ", y.DebugString()));
     }
   }
-  return Status::OK();
+  return absl::OkStatus();
 }
 
 // Tests if "x" and "y" are tensors of the same type, same shape, and with
 // close values. For floating-point tensors, the element-wise difference between
 // x and y must no more than atol + rtol * abs(x). For non-floating-point
 // tensors the values must match exactly.
-Status TensorsAreClose(const Tensor& a, const Tensor& b, double atol,
-                       double rtol) {
+absl::Status TensorsAreClose(const Tensor& a, const Tensor& b, double atol,
+                             double rtol) {
   if (a.dtype() != b.dtype()) {
     return errors::InvalidArgument(absl::StrCat(
         "Tensors have different types: ", DataTypeString(a.dtype()), " and ",
@@ -1488,7 +1514,7 @@ OpTest::TestResult OpTest::ExpectTfAndXlaOutputsAreClose(
   GraphDef graph;
   std::vector<string> expected_inputs, test_inputs;
   std::vector<string> expected_fetches, test_fetches;
-  Status status = builder.BuildGraph(
+  absl::Status status = builder.BuildGraph(
       absl::StrCat("test", num_tests_, "_expected"), reference_device,
       /*use_jit=*/false, &graph, /*test_node_def=*/nullptr, &expected_inputs,
       &expected_fetches);
@@ -1515,9 +1541,12 @@ OpTest::TestResult OpTest::ExpectTfAndXlaOutputsAreClose(
     return kInvalid;
   }
 
-  status = session_->Extend(graph);
+  // Create a session with the corresponding graph.
+  SessionOptions session_options;
+  session_.reset(NewSession(session_options));
+  status = session_->Create(graph);
   if (!status.ok()) {
-    LOG(ERROR) << "Session::Extend() failed: " << status;
+    LOG(ERROR) << "Session::Create() failed: " << status;
     return kFatalError;
   }
 
@@ -1533,7 +1562,7 @@ OpTest::TestResult OpTest::ExpectTfAndXlaOutputsAreClose(
 
   std::vector<Tensor> expected_outputs, test_outputs;
   VLOG(1) << "Running expected graph";
-  Status s =
+  absl::Status s =
       session_->Run(expected_feeds, expected_fetches, {}, &expected_outputs);
   if (!s.ok()) {
     VLOG(1) << "Expected graph failed with status: " << s << ". Ignoring test";
@@ -1772,7 +1801,8 @@ TEST_F(OpTest, AvgPool) {
 }
 
 TEST_F(OpTest, AvgPool3D) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     std::uniform_int_distribution<int> random_int(1, 5);
     std::vector<int64_t> dims = RandomDims(5, 5, 1);
@@ -1802,7 +1832,8 @@ TEST_F(OpTest, AvgPool3D) {
 }
 
 TEST_F(OpTest, AvgPoolGrad) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     int batch = RandomDim(1), features = RandomDim(1);
     WindowedSpatialDims d = ChooseWindowedSpatialDims(2);
@@ -1823,7 +1854,8 @@ TEST_F(OpTest, AvgPoolGrad) {
 }
 
 TEST_F(OpTest, AvgPool3DGrad) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     int batch = RandomDim(1), features = RandomDim(1);
     WindowedSpatialDims d = ChooseWindowedSpatialDims(3);
@@ -1844,7 +1876,9 @@ TEST_F(OpTest, AvgPool3DGrad) {
 }
 
 TEST_F(OpTest, BatchMatMul) {
-  GTEST_SKIP() << "b/201095155";
+  // See note about failing Kokoro tests: b/214080339#comment22
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     const BatchMatMulArguments a = ChooseBatchMatMulArguments(false);
     return ExpectTfAndXlaOutputsAreClose(OpTestBuilder("BatchMatMul")
@@ -1857,8 +1891,11 @@ TEST_F(OpTest, BatchMatMul) {
 }
 
 TEST_F(OpTest, BatchMatMulV2) {
-  GTEST_SKIP() << "b/201095155";
-  Repeatedly([this]() {  // NOLINT: due to GTEST_SKIP
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  // :randomized_tests_seeded is flaky with --tf_xla_random_seed=200839030
+  // See b/229622638.
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
+  Repeatedly([this]() {
     const BatchMatMulArguments a = ChooseBatchMatMulArguments(true);
     return ExpectTfAndXlaOutputsAreClose(OpTestBuilder("BatchMatMulV2")
                                              .RandomInput(a.dtype, a.lhs_dims)
@@ -1870,7 +1907,8 @@ TEST_F(OpTest, BatchMatMulV2) {
 }
 
 TEST_F(OpTest, BatchToSpace) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     const int num_block_dims = 2;
     std::vector<int64_t> block_dims =
@@ -1980,7 +2018,7 @@ TEST_F(OpTest, BiasAddV1) {
 }
 
 TEST_F(OpTest, Bitcast) {
-  GTEST_SKIP() << "b/201095155";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
   Repeatedly([this]() {  // NOLINT: due to GTEST_SKIP
     auto src_type = Choose<DataType>(kAllNumberTypes);
     auto dst_type = Choose<DataType>(kAllNumberTypes);
@@ -2079,7 +2117,7 @@ TEST_F(OpTest, Cast) {
 }
 
 TEST_F(OpTest, CastBF16) {
-  GTEST_SKIP() << "b/201095155";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
   Repeatedly([this]() {
     DataType src_type, dst_type;
     src_type = Choose<DataType>({DT_FLOAT});
@@ -2132,8 +2170,6 @@ TEST_F(OpTest, Complex) {
 }
 
 TEST_F(OpTest, Concat) {
-  GTEST_SKIP() << "b/201095155";
-  GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {  // NOLINT: due to GTEST_SKIP
     ConcatArguments a = ChooseConcatArguments(false);
     return ExpectTfAndXlaOutputsAreClose(OpTestBuilder("Concat")
@@ -2271,7 +2307,6 @@ TEST_F(OpTest, RFFT3D) {
 }
 
 TEST_F(OpTest, IRFFT) {
-  GTEST_SKIP() << "b/201095155";
   Repeatedly([this]() {
     std::vector<int64_t> dims = RandomDims(1, kDefaultMaxRank, 3);
     int64_t orig_size = dims[dims.size() - 1];
@@ -2310,7 +2345,8 @@ TEST_F(OpTest, IRFFT3D) {
 }
 
 TEST_F(OpTest, Conv2D) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     WindowedSpatialDims d = ChooseWindowedSpatialDims(2);
     std::uniform_int_distribution<int> random_int(1, 5);
@@ -2337,7 +2373,6 @@ TEST_F(OpTest, Conv2D) {
 }
 
 TEST_F(OpTest, Conv2DBackpropFilter) {
-  GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     WindowedSpatialDims d = ChooseWindowedSpatialDims(2);
     std::uniform_int_distribution<int> random_int(1, 5);
@@ -2390,7 +2425,8 @@ TEST_F(OpTest, Conv2DBackpropInput) {
 }
 
 TEST_F(OpTest, Conv3D) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     WindowedSpatialDims d = ChooseWindowedSpatialDims(3);
     std::uniform_int_distribution<int> random_int(1, 5);
@@ -2413,7 +2449,8 @@ TEST_F(OpTest, Conv3D) {
 }
 
 TEST_F(OpTest, Conv3DBackpropFilter) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     WindowedSpatialDims d = ChooseWindowedSpatialDims(3);
     std::uniform_int_distribution<int> random_int(1, 5);
@@ -2440,7 +2477,8 @@ TEST_F(OpTest, Conv3DBackpropFilter) {
 }
 
 TEST_F(OpTest, Conv3DBackpropInput) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     WindowedSpatialDims d = ChooseWindowedSpatialDims(3);
     std::uniform_int_distribution<int> random_int(1, 5);
@@ -2508,7 +2546,8 @@ TEST_F(OpTest, DepthToSpace) {
 }
 
 TEST_F(OpTest, DepthwiseConv2DNative) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     WindowedSpatialDims d = ChooseWindowedSpatialDims(2);
     std::uniform_int_distribution<int> random_int(1, 5);
@@ -2532,7 +2571,8 @@ TEST_F(OpTest, DepthwiseConv2DNative) {
 }
 
 TEST_F(OpTest, DepthwiseConv2DNativeBackpropFilter) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     WindowedSpatialDims d = ChooseWindowedSpatialDims(2);
     std::uniform_int_distribution<int> random_int(1, 5);
@@ -2560,7 +2600,8 @@ TEST_F(OpTest, DepthwiseConv2DNativeBackpropFilter) {
 }
 
 TEST_F(OpTest, DepthwiseConv2DBackpropInput) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     WindowedSpatialDims d = ChooseWindowedSpatialDims(2);
     std::uniform_int_distribution<int> random_int(1, 5);
@@ -2895,7 +2936,9 @@ TEST_F(OpTest, GatherV2) {
 TEST_F(OpTest, GatherNd) {
   // :randomized_tests_mlir fails with --tf_xla_random_seed=459353625
   // --test_arg=--tf_xla_test_repetitions=100
-  GTEST_SKIP() << "b/201095155";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  // See b/214080339#comment27 as this test causes Kokoro to crash.
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {  // NOLINT: due to GTEST_SKIP
     auto params_type = Choose<DataType>(kAllXlaTypes);
     // GatherNd seems undefined on the case where params has rank 0.
@@ -3262,7 +3305,6 @@ TEST_F(OpTest, MatrixBandPart) {
 }
 
 TEST_F(OpTest, MatrixDiag) {
-  GTEST_SKIP() << "b/201095155";
   Repeatedly([this]() {
     auto type = Choose<DataType>({DT_INT32, DT_FLOAT, DT_COMPLEX64});
     return ExpectTfAndXlaOutputsAreClose(OpTestBuilder("MatrixDiag")
@@ -3272,7 +3314,7 @@ TEST_F(OpTest, MatrixDiag) {
 }
 
 TEST_F(OpTest, MatrixDiagPart) {
-  GTEST_SKIP() << "b/201095155";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
   Repeatedly([this]() {
     auto type = Choose<DataType>({DT_INT32, DT_FLOAT, DT_COMPLEX64});
     return ExpectTfAndXlaOutputsAreClose(OpTestBuilder("MatrixDiagPart")
@@ -3282,7 +3324,8 @@ TEST_F(OpTest, MatrixDiagPart) {
 }
 
 TEST_F(OpTest, MatrixDiagPartV3) {
-  GTEST_SKIP() << "b/201095155";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {  // NOLINT: due to GTEST_SKIP
     auto type = Choose<DataType>(kAllXlaTypes);
     auto align = Choose<std::string>(
@@ -3321,7 +3364,7 @@ TEST_F(OpTest, MatrixSetDiag) {
 TEST_F(OpTest, MatrixSetDiagV2) {
   Repeatedly([this]() {
     auto type = Choose<DataType>(kAllXlaTypes);
-    auto shape = RandomDims(2);
+    auto shape = RandomDims(2, kDefaultMaxRank, 1 /* non-zero dims */);
     int rank = shape.size();
     int64_t max_num_diags = shape[rank - 2] + shape[rank - 1] - 1;
     int64_t num_diags =
@@ -3395,7 +3438,8 @@ TEST_F(OpTest, MaxPool) {
 }
 
 TEST_F(OpTest, MaxPool3D) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     std::uniform_int_distribution<int> random_int(1, 5);
     std::vector<int64_t> dims = RandomDims(5, 5, 1);
@@ -3562,7 +3606,7 @@ TEST_F(OpTest, OneHot) {
 }
 
 TEST_F(OpTest, OnesLike) {
-  GTEST_SKIP() << "b/201095155";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
   Repeatedly([this]() {
     auto type = Choose<DataType>({DT_INT32, DT_FLOAT, DT_COMPLEX64});
     return ExpectTfAndXlaOutputsAreClose(
@@ -3592,7 +3636,8 @@ TEST_F(OpTest, Pack) {
 }
 
 TEST_F(OpTest, Pad) {
-  GTEST_SKIP() << "b/201095155";
+  // See note about failing Kokoro tests: b/214080339#comment22
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
   Repeatedly([this]() {
     auto a = ChoosePadArguments();
     return ExpectTfAndXlaOutputsAreClose(
@@ -3677,8 +3722,9 @@ TEST_F(OpTest, QuantizeAndDequantizeV2) {
 }
 
 TEST_F(OpTest, RandomShuffle) {
-  GTEST_SKIP()
-      << "b/209062491";  // This test passes with --tf_xla_test_device=CPU:0
+  // See b/209062491 as this test passes with --tf_xla_test_device=CPU:0
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {  // NOLINT: due to GTEST_SKIP
     auto type = Choose<DataType>(kAllXlaTypes);
     return ExpectTfAndXlaOutputsAreClose(OpTestBuilder("RandomShuffle")
@@ -3885,7 +3931,7 @@ TEST_F(OpTest, ResizeBilinearGrad) {
 }
 
 TEST_F(OpTest, Reverse) {
-  GTEST_SKIP() << "b/201095155";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
   Repeatedly([this]() {
     std::vector<int64_t> dims = RandomDims(1);
     auto type = Choose<DataType>(kAllXlaTypes);
@@ -3898,7 +3944,8 @@ TEST_F(OpTest, Reverse) {
 }
 
 TEST_F(OpTest, ReverseSequence) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     std::vector<int64_t> dims = RandomDims(/*min_rank=*/2);
     auto type = Choose<DataType>(kAllXlaTypes);
@@ -4273,7 +4320,8 @@ TEST_F(OpTest, SpaceToDepth) {
 }
 
 TEST_F(OpTest, SparseMatMul) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     int64_t x = RandomDim();
     int64_t y = RandomDim();
@@ -4324,7 +4372,9 @@ TEST_F(OpTest, SparseSoftmaxCrossEntropyWithLogits) {
 }
 
 TEST_F(OpTest, Split) {
-  GTEST_SKIP() << "b/197140886";
+  // See b/214080339#comment27 as this test causes Kokoro to crash.
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     auto type = Choose<DataType>(kAllXlaTypes);
     std::vector<int64_t> dims = RandomDims(1);
@@ -4346,7 +4396,8 @@ TEST_F(OpTest, Split) {
 
 TEST_F(OpTest, SplitV) {
   // Likely this only fails when dim is negative. Try type = DT_FLOAT first.
-  GTEST_SKIP() << "b/201095155";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {  // NOLINT: due to GTEST_SKIP
     auto type = Choose<DataType>(kAllXlaTypes);
     std::vector<int64_t> dims = RandomDims(1, kDefaultMaxRank, 1);
@@ -4460,7 +4511,7 @@ TEST_F(OpTest, Sum) {
 }
 
 TEST_F(OpTest, StridedSlice) {
-  GTEST_SKIP() << "b/201095155";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
   Repeatedly([this]() {
     auto type = Choose<DataType>(kAllXlaTypes);
     std::vector<int64_t> data_dims = RandomDims();
@@ -4506,7 +4557,8 @@ TEST_F(OpTest, StridedSlice) {
 }
 
 TEST_F(OpTest, StridedSliceGrad) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     auto type = Choose<DataType>(kAllXlaTypes);
 
@@ -4587,8 +4639,8 @@ TEST_F(OpTest, TanhGrad) {
 }
 
 TEST_F(OpTest, TensorScatterUpdate) {
-  GTEST_SKIP() << "b/201095155";
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {  // NOLINT: due to GTEST_SKIP
     auto a = ChooseScatterArguments();
     return ExpectTfAndXlaOutputsAreClose(OpTestBuilder("TensorScatterUpdate")
@@ -4617,8 +4669,8 @@ TEST_F(OpTest, Tile) {
 }
 
 TEST_F(OpTest, TopKV2) {
-  GTEST_SKIP() << "b/201095155";
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {  // NOLINT: due to GTEST_SKIP
     auto type = Choose<DataType>({DT_INT32, DT_FLOAT, DT_INT64});
     auto shape = RandomDims(1);
@@ -4646,7 +4698,8 @@ TEST_F(OpTest, Transpose) {
 }
 
 TEST_F(OpTest, TruncateDiv) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   Repeatedly([this]() {
     DataType type = DT_INT32;
     auto dims = BroadcastableDims();
@@ -4776,7 +4829,7 @@ TEST_F(OpTest, Xlogy) {
 }
 
 TEST_F(OpTest, ZerosLike) {
-  GTEST_SKIP() << "b/201095155";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
   Repeatedly([this]() {
     auto type = Choose<DataType>({DT_INT32, DT_FLOAT, DT_COMPLEX64});
     return ExpectTfAndXlaOutputsAreClose(
@@ -4802,7 +4855,8 @@ TEST_F(OpTest, Zeta) {
 //   --gunit_filter='OpTest.FusedBatchNormTraining'
 //   --tf_xla_random_seed=2838146746
 TEST_F(OpTest, FusedBatchNormTraining) {
-  GTEST_SKIP() << "b/197140886";
+  if (tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/201095155";
+  if (!tensorflow::tf_xla_test_use_mlir) GTEST_SKIP() << "b/197140886";
   bool is_nhwc = RandomBool();
   std::vector<int64_t> x_dims = RandomDims(/*min_rank=*/4, /*max_rank=*/4,
                                            /*min_size=*/5, /*max_size=*/20);

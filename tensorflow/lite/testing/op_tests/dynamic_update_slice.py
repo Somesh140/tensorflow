@@ -15,7 +15,8 @@
 """Test configs for tensor_list_set_item."""
 import functools
 
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
+from tensorflow.lite.python import lite
 from tensorflow.lite.testing.zip_test_utils import create_tensor_data
 from tensorflow.lite.testing.zip_test_utils import make_zip_of_tests
 from tensorflow.lite.testing.zip_test_utils import register_make_test_function
@@ -29,7 +30,7 @@ def _tflite_convert_verify_op(tflite_convert_function, *args, **kwargs):
   if not result[0]:
     tf.compat.v1.logging.error(result[1])  # stderr from running tflite_convert.
     raise RuntimeError("Failed to build model: \n\n" + result[1])
-  interpreter = tf.lite.Interpreter(model_content=tflite_model_binary)
+  interpreter = lite.Interpreter(model_content=tflite_model_binary)
   interpreter.allocate_tensors()
   for op in interpreter._get_ops_details():  # pylint: disable=protected-access
     if op["op_name"] == "DYNAMIC_UPDATE_SLICE":
@@ -44,7 +45,7 @@ def make_dynamic_update_slice_tests(options):
 
   test_parameters = [
       {
-          "element_dtype": [tf.float32, tf.int32],
+          "element_dtype": [tf.float32, tf.int32, tf.bool],
           "num_elements": [4, 5, 6],
           "element_shape": [[], [5], [3, 3]],
           "index": [0, 1, 2, 3],
@@ -53,10 +54,10 @@ def make_dynamic_update_slice_tests(options):
 
   def build_graph(parameters):
     """Build the TensorListSetItem op testing graph."""
-    data = tf.placeholder(
+    data = tf.compat.v1.placeholder(
         dtype=parameters["element_dtype"],
         shape=[parameters["num_elements"]] + parameters["element_shape"])
-    item = tf.placeholder(
+    item = tf.compat.v1.placeholder(
         dtype=parameters["element_dtype"], shape=parameters["element_shape"])
     tensor_list = list_ops.tensor_list_from_tensor(data,
                                                    parameters["element_shape"])

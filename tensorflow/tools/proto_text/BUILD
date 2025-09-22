@@ -8,6 +8,8 @@
 # Note that proto3 well-known types (e.g. Any) are not handled in a special way
 # by the generated code.
 
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load(
     "//tensorflow:tensorflow.bzl",
     "if_ios",
@@ -22,6 +24,7 @@ load(
 )
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = ["//visibility:private"],
     licenses = ["notice"],
 )
@@ -35,9 +38,10 @@ cc_binary(
     visibility = ["//tensorflow:internal"],
     deps = [
         ":gen_proto_text_functions_lib",
-        "@com_google_protobuf//:protobuf",
-        "//tensorflow/core/platform:protobuf_compiler",
         "//tensorflow/core:lib_proto_parsing",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_protobuf//:protobuf",
+        "@local_xla//xla/tsl/platform:protobuf_compiler",
     ] + if_ios(["//tensorflow/core/platform:logging"]),
 )
 
@@ -64,13 +68,13 @@ cc_library(
     }),
     deps = [
         "//tensorflow/core:lib_proto_parsing",
+        "@com_google_absl//absl/strings:string_view",
     ] + if_ios(["//tensorflow/core/platform:logging"]),
 )
 
 tf_proto_library(
     name = "test_proto",
     srcs = ["test.proto"],
-    cc_api_version = 2,
 )
 
 tf_generate_proto_text_sources(

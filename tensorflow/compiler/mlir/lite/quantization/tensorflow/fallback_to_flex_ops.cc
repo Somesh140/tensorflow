@@ -12,18 +12,38 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
 
 #include "absl/base/attributes.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "flatbuffers/flexbuffers.h"  // from @flatbuffers
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/Attributes.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "mlir/IR/Diagnostics.h"  // from @llvm-project
+#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
+#include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/PatternMatch.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
-#include "tensorflow/compiler/mlir/tensorflow/translate/export_tf_dialect_op.h"
+#include "tensorflow/compiler/mlir/tensorflow/utils/translate_utils.h"
+#include "tensorflow/core/framework/node_def.pb.h"
 
 namespace mlir {
 namespace TF {
@@ -149,7 +169,7 @@ inline bool IsFusibleWithBiasOp(Operation *op) {
 inline void CreateFlexOpCustomOptions(const std::string &op_name,
                                       const std::string &node_def_str,
                                       std::string &custom_option_buffer) {
-  auto flex_builder = absl::make_unique<flexbuffers::Builder>();
+  auto flex_builder = std::make_unique<flexbuffers::Builder>();
   flex_builder->Vector([&]() {
     flex_builder->String(op_name);
     flex_builder->String(node_def_str);
@@ -160,20 +180,17 @@ inline void CreateFlexOpCustomOptions(const std::string &op_name,
 }
 
 // Creates ElementsAttr for custom option.
-inline OpaqueElementsAttr CustomOptionForFlexOp(OpBuilder *builder,
-                                                const std::string &content) {
-  ShapedType type = RankedTensorType::get(
-      {static_cast<int64_t>(content.size())}, builder->getIntegerType(8));
-  return OpaqueElementsAttr::get(builder->getContext()->getLoadedDialect("tfl"),
-                                 type,
-                                 StringRef(content.data(), content.size()));
+inline TFL::ConstBytesAttr CustomOptionForFlexOp(OpBuilder *builder,
+                                                 const std::string &content) {
+  return TFL::ConstBytesAttr::get(builder->getContext(),
+                                  StringRef(content.data(), content.size()));
 }
 
 // Fallbacks ops that are not supported by TF Quantization to TFLite Flex ops.
 class FallbackToFlexOps
-    : public PassWrapper<FallbackToFlexOps, OperationPass<FuncOp>> {
+    : public PassWrapper<FallbackToFlexOps, OperationPass<func::FuncOp>> {
  public:
-  FallbackToFlexOps() {}
+  FallbackToFlexOps() = default;
   explicit FallbackToFlexOps(const std::string &mode) { mode_ = mode; }
   FallbackToFlexOps(const FallbackToFlexOps &other) { mode_ = other.mode_; }
 
@@ -216,7 +233,7 @@ class FallbackToFlexOps
 };
 
 bool FallbackToFlexOps::ConvertToFlexOp(Operation *op) {
-  tensorflow::StatusOr<std::unique_ptr<tensorflow::NodeDef>> node_def =
+  absl::StatusOr<std::unique_ptr<tensorflow::NodeDef>> node_def =
       tensorflow::ConvertTFDialectOpToNodeDef(
           op, /*name=*/"", /*ignore_unregistered_attrs=*/true);
   if (!node_def.ok()) {
@@ -251,7 +268,7 @@ Value SetNoFallbackAttr(PatternRewriter &rewriter, Value val) {
 
 // Returns true if the attr is a float attribute and be equal to value.
 static bool FloatValueEquals(const Attribute &attr, double value) {
-  auto fp_attr = attr.dyn_cast_or_null<DenseFPElementsAttr>();
+  auto fp_attr = mlir::dyn_cast_or_null<DenseFPElementsAttr>(attr);
   if (fp_attr == nullptr) return false;
 
   if (fp_attr.isSplat()) {
@@ -264,7 +281,7 @@ static bool FloatValueEquals(const Attribute &attr, double value) {
 
 // Returns true if the rank of the value equals to the given rank.
 bool RankEquals(Value value, int rank) {
-  auto rank_type = value.getType().template dyn_cast<RankedTensorType>();
+  auto rank_type = mlir::dyn_cast<RankedTensorType>(value.getType());
   return (rank_type && rank_type.getRank() == rank);
 }
 
@@ -273,13 +290,13 @@ bool RankEquals(Value value, int rank) {
 void FallbackToFlexOps::runOnOperation() {
   if (mode_.empty()) return;
 
-  FuncOp func = getOperation();
+  func::FuncOp func = getOperation();
   MLIRContext *ctx = &getContext();
 
   // Convert binary ops to BiasAdd ops if possible.
   RewritePatternSet patterns(ctx);
   populateWithGenerated(patterns);
-  (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
+  (void)applyPatternsGreedily(func, std::move(patterns));
 
   // Convert unsupported ops to Flex ops.
   auto tf_dialect = ctx->getLoadedDialect<TF::TensorFlowDialect>();
@@ -295,7 +312,7 @@ void FallbackToFlexOps::runOnOperation() {
 }
 }  // namespace internal
 
-std::unique_ptr<OperationPass<FuncOp>> CreateFallbackToFlexOpsPass(
+std::unique_ptr<OperationPass<func::FuncOp>> CreateFallbackToFlexOpsPass(
     const std::string &mode) {
   return std::make_unique<internal::FallbackToFlexOps>(mode);
 }

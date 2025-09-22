@@ -14,8 +14,8 @@ load(
 )
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = ["//tensorflow/core:__pkg__"],
-    features = ["-parse_headers"],
     licenses = ["notice"],
 )
 
@@ -23,7 +23,6 @@ cc_library(
     name = "gif_internal",
     srcs = [
         "gif_io.cc",
-        "//tensorflow/core/platform:gif_hdrs",
     ],
     hdrs = ["gif_io.h"],
     copts = tf_copts(),
@@ -37,6 +36,7 @@ cc_library(
         "//tensorflow/core:lib_internal",
         "//tensorflow/core/platform:gif",
         "@com_google_absl//absl/strings",
+        "@gif",
     ],
 )
 
@@ -51,18 +51,28 @@ cc_library(
         "//tensorflow/core/lib/core:legacy_lib_core_stringpiece_header",
         "//tensorflow/core/lib/gtl:legacy_android_gif_internal_headers",
         "//tensorflow/core/platform:gif_internal_hdrs",
-        "//tensorflow/core/platform/default:integral_types.h",
-        "//tensorflow/core/platform/default:logging.h",
+        "@local_tsl//tsl/platform:gif_internal_hdrs",
+        "@local_xla//xla/tsl/platform/default:integral_types.h",
     ],
     copts = tf_copts(),
+    features = ["-layering_check"],
     linkopts = if_android(["-ldl"]),
     deps = [
+        "//tensorflow/core/platform:byte_order",
+        "//tensorflow/core/platform:cord",
         "//tensorflow/core/platform:dynamic_annotations",
         "//tensorflow/core/platform:gif",
         "//tensorflow/core/platform:logging",
         "//tensorflow/core/platform:stringpiece",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:dynamic_annotations",
         "@com_google_absl//absl/strings",
+        "@eigen_archive//:eigen3",
+        "@gif",
+        "@local_tsl//tsl/platform:logging",
+        "@local_tsl//tsl/platform:tstring",
+        "@local_tsl//tsl/platform:types",
+        "@local_xla//xla/tsl/platform:types",
     ],
 )
 

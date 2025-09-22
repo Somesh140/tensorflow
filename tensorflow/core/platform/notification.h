@@ -16,17 +16,4 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_PLATFORM_NOTIFICATION_H_
 #define TENSORFLOW_CORE_PLATFORM_NOTIFICATION_H_
 
-#include "tensorflow/core/platform/platform.h"
-
-// Include appropriate platform-dependent implementations of Notification.
-#if defined(PLATFORM_GOOGLE)
-#include "tensorflow/core/platform/google/notification.h"
-#elif defined(PLATFORM_POSIX) || defined(PLATFORM_POSIX_ANDROID) ||    \
-    defined(PLATFORM_GOOGLE_ANDROID) || defined(PLATFORM_POSIX_IOS) || \
-    defined(PLATFORM_GOOGLE_IOS) || defined(PLATFORM_WINDOWS)
-#include "tensorflow/core/platform/default/notification.h"
-#else
-#error Define the appropriate PLATFORM_<foo> macro for this platform
-#endif
-
 #endif  // TENSORFLOW_CORE_PLATFORM_NOTIFICATION_H_

@@ -473,7 +473,7 @@ TEST(VariantTest, Tensor) {
 TEST(VariantTest, NontrivialTensorVariantCopy) {
   Tensor variants(DT_VARIANT, {});
   Tensor t(true);
-  test::FillValues<Variant>(&variants, gtl::ArraySlice<Variant>({t}));
+  test::FillValues<Variant>(&variants, absl::Span<const Variant>({t}));
   const Tensor* t_c = variants.flat<Variant>()(0).get<Tensor>();
   EXPECT_EQ(t_c->dtype(), t.dtype());
   EXPECT_EQ(t_c->shape(), t.shape());
@@ -591,8 +591,8 @@ TEST(VariantTest, TensorListTest) {
   EXPECT_EQ(y_unknown.TypeName(), "TensorList");
   EXPECT_EQ(y_unknown.TypeId(), TypeIndex::Make<VariantTensorDataProto>());
   EXPECT_EQ(y_unknown.DebugString(),
-            strings::StrCat(
-                "Variant<type: TensorList value: ", data.DebugString(), ">"));
+            absl::StrCat("Variant<type: TensorList value: ", data.DebugString(),
+                         ">"));
 }
 
 template <bool BIG>
@@ -675,6 +675,18 @@ TEST(VariantTest, EncodeDecodeTensor) {
             "Variant<type: tensorflow::Tensor value: Tensor<type: int32 shape: "
             "[] values: 42>>");
   EXPECT_EQ(x.get<Tensor>()->flat<int>()(0), y.get<Tensor>()->flat<int>()(0));
+}
+
+TEST(BoolVariantTest, DecodeNonBool) {
+  Tensor parsed(DT_VARIANT);
+  TensorProto tensor_proto;
+  tensor_proto.set_dtype(DT_VARIANT);
+  VariantTensorDataProto* variant = tensor_proto.add_variant_val();
+  variant->set_type_name("bool");
+  variant->set_metadata("-");  // 42
+  EXPECT_TRUE(parsed.FromProto(tensor_proto));
+  EXPECT_EQ(parsed.NumElements(), 1);
+  EXPECT_TRUE(parsed.flat<Variant>()(0).get<bool>());
 }
 
 }  // end namespace tensorflow

@@ -14,22 +14,22 @@ limitations under the License.
 ==============================================================================*/
 
 #include <cstdint>
-#include <iterator>
-#include <memory>
 
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"  // from @llvm-project
 #include "mlir/Dialect/Affine/LoopUtils.h"  // from @llvm-project
-#include "mlir/Dialect/SCF/SCF.h"  // from @llvm-project
-#include "mlir/Dialect/StandardOps/IR/Ops.h"  // from @llvm-project
+#include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
+#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/Dialect/SCF/IR/SCF.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
-#include "mlir/IR/BlockAndValueMapping.h"  // from @llvm-project
+#include "mlir/IR/IRMapping.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/IR/Matchers.h"  // from @llvm-project
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/IR/Region.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Transforms/Inliner.h"  // from @llvm-project
 #include "mlir/Transforms/InliningUtils.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tfr/ir/tfr_ops.h"
@@ -65,7 +65,7 @@ class UnrollSCFForOp : public OpRewritePattern<scf::ForOp> {
     // TODO(fengliuai): use loopUnrollByFactor once the iter_arg is supported
 
     Block *single_block = for_op.getBody();
-    BlockAndValueMapping mapping;
+    IRMapping mapping;
     Value iv = for_op.getInductionVar();
     for (auto iter_op :
          llvm::zip(for_op.getRegionIterArgs(), for_op.getInitArgs())) {
@@ -143,8 +143,9 @@ LogicalResult SimplifySCFIfOp::InlineRegion(Location loc,
                                             Operation *inline_point,
                                             Region *region) const {
   InlinerInterface interface(loc.getContext());
-  if (failed(inlineRegion(interface, region, inline_point, {},
-                          inline_point->getResults(), loc,
+  InlinerConfig config;
+  if (failed(inlineRegion(interface, config.getCloneCallback(), region,
+                          inline_point, {}, inline_point->getResults(), loc,
                           /*shouldCloneInlinedRegion=*/true))) {
     return failure();
   }
@@ -156,7 +157,7 @@ LogicalResult SimplifySCFIfOp::InlineRegion(Location loc,
 
 }  // namespace
 
-void populateCanonicalizationPatterns(FuncOp func,
+void populateCanonicalizationPatterns(func::FuncOp func,
                                       RewritePatternSet &patterns) {
   MLIRContext *context = func.getContext();
   mlir::Dialect *tf = context->getLoadedDialect<mlir::TF::TensorFlowDialect>();

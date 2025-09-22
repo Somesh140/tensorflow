@@ -117,7 +117,7 @@ class SubgraphTest : public ::testing::Test {
         str_util::Split(targets_str, ',', str_util::SkipEmpty());
 
     subgraph::RewriteGraphMetadata metadata;
-    Status s = subgraph::RewriteGraphForExecution(
+    absl::Status s = subgraph::RewriteGraphForExecution(
         subgraph, fed, fetch, targets, device_info_, use_function_convention,
         &metadata);
     if (!s.ok()) {
@@ -312,7 +312,7 @@ TEST_F(SubgraphTest, ChainOfFools) {
   EXPECT_TRUE(HasEdge("e", 0, "_send_e_0", 0));
 }
 
-static bool HasSubstr(StringPiece base, StringPiece substr) {
+static bool HasSubstr(absl::string_view base, absl::string_view substr) {
   bool ok = absl::StrContains(base, substr);
   EXPECT_TRUE(ok) << base << ", expected substring " << substr;
   return ok;
@@ -355,7 +355,7 @@ void BM_SubgraphHelper(::testing::benchmark::State& state,
     GraphDefBuilder b(GraphDefBuilder::kFailImmediately);
     Node* last_node = nullptr;
     for (int i = 0; i < num_nodes; i++) {
-      string name = strings::StrCat("N", i);
+      string name = absl::StrCat("N", i);
       if (i > 0) {
         last_node = ops::UnaryOp("Op", last_node, b.opts().WithName(name));
       } else {
@@ -367,10 +367,10 @@ void BM_SubgraphHelper(::testing::benchmark::State& state,
 
   std::vector<string> fed;
   if (num_nodes > 1000) {
-    fed.push_back(strings::StrCat("N", num_nodes - 1000));
+    fed.push_back(absl::StrCat("N", num_nodes - 1000));
   }
   std::vector<string> fetch;
-  std::vector<string> targets = {strings::StrCat("N", num_nodes - 1)};
+  std::vector<string> targets = {absl::StrCat("N", num_nodes - 1)};
 
   for (auto s : state) {
     Graph* subgraph = new Graph(OpRegistry::Global());

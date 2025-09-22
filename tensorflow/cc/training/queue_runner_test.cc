@@ -15,23 +15,38 @@ limitations under the License.
 
 #include "tensorflow/cc/training/queue_runner.h"
 
+#include <functional>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/synchronization/notification.h"
+#include "tensorflow/cc/framework/ops.h"
 #include "tensorflow/cc/framework/scope.h"
-#include "tensorflow/cc/ops/standard_ops.h"
+#include "tensorflow/cc/ops/const_op.h"
+#include "tensorflow/cc/ops/data_flow_ops.h"
+#include "tensorflow/cc/ops/math_ops.h"
+#include "tensorflow/cc/ops/random_ops.h"
+#include "tensorflow/cc/ops/state_ops.h"
 #include "tensorflow/cc/training/coordinator.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/status.h"
+#include "xla/tsl/protobuf/error_codes.pb.h"
+#include "tensorflow/core/framework/cost_graph.pb.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.pb.h"
-#include "tensorflow/core/lib/core/notification.h"
-#include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/env.h"
+#include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/protobuf/config.pb.h"
 #include "tensorflow/core/protobuf/error_codes.pb.h"
 #include "tensorflow/core/protobuf/queue_runner.pb.h"
 #include "tensorflow/core/public/session.h"
+#include "tensorflow/core/public/session_options.h"
 
 namespace tensorflow {
 namespace {
@@ -229,7 +244,7 @@ TEST(QueueRunnerTest, RealEnqueueDequeue) {
 }
 
 void JoinThread(QueueRunner* queue_runner, bool* join_succeeded,
-                Notification* join_done) {
+                absl::Notification* join_done) {
   EXPECT_EQ(queue_runner->Join().code(), Code::CANCELLED);
   *join_succeeded = true;
   join_done->Notify();
@@ -257,7 +272,7 @@ TEST(QueueRunnerTest, SessionCloseCancelPendingEnqueue) {
   // The expected behavior is the QueueRunner::Join() call is blocked until
   // Session::Close() is called.
   bool join_succeeded = false;
-  Notification join_done;
+  absl::Notification join_done;
   Env::Default()->SchedClosure(
       std::bind(&JoinThread, qr.get(), &join_succeeded, &join_done));
 
@@ -339,7 +354,8 @@ TEST(QueueRunnerTest, CallbackCalledOnError) {
   std::unique_ptr<QueueRunner> qr;
   TF_EXPECT_OK(QueueRunner::New(queue_runner_def, &qr));
   bool error_caught = false;
-  qr->AddErrorCallback([&error_caught](const Status&) { error_caught = true; });
+  qr->AddErrorCallback(
+      [&error_caught](const absl::Status&) { error_caught = true; });
   TF_EXPECT_OK(qr->Start(session.get()));
   EXPECT_FALSE(qr->Join().ok());
   EXPECT_TRUE(error_caught);

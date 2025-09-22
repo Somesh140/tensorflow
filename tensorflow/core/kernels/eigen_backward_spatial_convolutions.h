@@ -16,8 +16,8 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_KERNELS_EIGEN_BACKWARD_SPATIAL_CONVOLUTIONS_H_
 #define TENSORFLOW_CORE_KERNELS_EIGEN_BACKWARD_SPATIAL_CONVOLUTIONS_H_
 
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
-#include "tensorflow/core/kernels/eigen_spatial_convolutions.h"
+#include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
+#include "xla/tsl/framework/convolution/eigen_spatial_convolutions.h"
 
 namespace Eigen {
 
@@ -51,7 +51,7 @@ typedef IndexList<type2index<1>, type2index<1>, type2index<0>, type2index<0>>
     ReverseRowMajor;
 
 template <typename OutputBackward, typename Kernel>
-EIGEN_ALWAYS_INLINE static const typename internal::conditional<
+EIGEN_ALWAYS_INLINE static const std::conditional_t<
     internal::traits<OutputBackward>::Layout == ColMajor,
     TensorReshapingOp<
         const DSizes<typename internal::traits<OutputBackward>::Index,
@@ -91,7 +91,7 @@ EIGEN_ALWAYS_INLINE static const typename internal::conditional<
                     const array<
                         typename internal::traits<OutputBackward>::Index, 4>,
                     const Eigen::TensorForcedEvalOp<const TensorReverseOp<
-                        const ReverseRowMajor, const Kernel>>>>>>>>::type
+                        const ReverseRowMajor, const Kernel>>>>>>>>
 SpatialConvolutionBackwardInput(
     const Kernel& kernel, const OutputBackward& output_backward,
     typename internal::traits<OutputBackward>::Index inputRows,
@@ -100,11 +100,12 @@ SpatialConvolutionBackwardInput(
     const DenseIndex row_in_stride = 1, const DenseIndex col_in_stride = 1) {
   typedef typename internal::traits<OutputBackward>::Index TensorIndex;
   typedef typename internal::traits<OutputBackward>::Scalar OutScalar;
-  TensorRef<Tensor<typename internal::traits<Kernel>::Scalar,
-                   internal::traits<Kernel>::NumDimensions,
-                   internal::traits<Kernel>::Layout, TensorIndex>>
+  TensorRef<const Tensor<typename internal::traits<Kernel>::Scalar,
+                         internal::traits<Kernel>::NumDimensions,
+                         internal::traits<Kernel>::Layout, TensorIndex>>
       kern(kernel);
-  TensorRef<Tensor<OutScalar, internal::traits<OutputBackward>::NumDimensions,
+  TensorRef<
+      const Tensor<OutScalar, internal::traits<OutputBackward>::NumDimensions,
                    internal::traits<OutputBackward>::Layout, TensorIndex>>
       out(output_backward);
 
@@ -168,8 +169,8 @@ SpatialConvolutionBackwardInput(
   // TODO(yangke): we can make things slightly faster by collapsing the
   // dimensions
   // where we don't reverse. Try that once we have a faster compiler.
-  typedef typename internal::conditional<isColMajor, ReverseColMajor,
-                                         ReverseRowMajor>::type Reverse;
+  typedef std::conditional_t<isColMajor, ReverseColMajor, ReverseRowMajor>
+      Reverse;
   Reverse kernel_reverse;
   // Reorder the dimensions to:
   //   filters x patch_rows x patch_cols x channels
@@ -311,7 +312,7 @@ SpatialConvolutionBackwardInput(
  */
 
 template <typename OutputBackward, typename Input>
-EIGEN_ALWAYS_INLINE static const typename internal::conditional<
+EIGEN_ALWAYS_INLINE static const std::conditional_t<
     internal::traits<Input>::Layout == ColMajor,
     const TensorReverseOp<
         const Eigen::array<typename internal::traits<Input>::Index,
@@ -376,7 +377,7 @@ EIGEN_ALWAYS_INLINE static const typename internal::conditional<
                                 const Eigen::array<
                                     typename internal::traits<Input>::Index,
                                     internal::traits<Input>::NumDimensions>,
-                                const Input>>>>>>>>>::type
+                                const Input>>>>>>>>>
 SpatialConvolutionBackwardKernel(
     const Input& input, const OutputBackward& output_backward,
     typename internal::traits<Input>::Index kernelRows,
@@ -385,11 +386,12 @@ SpatialConvolutionBackwardKernel(
     const DenseIndex row_in_stride = 1, const DenseIndex col_in_stride = 1) {
   typedef typename internal::traits<Input>::Index TensorIndex;
   typedef typename internal::traits<OutputBackward>::Scalar OutScalar;
-  TensorRef<Tensor<typename internal::traits<Input>::Scalar,
-                   internal::traits<Input>::NumDimensions,
-                   internal::traits<Input>::Layout, TensorIndex>>
+  TensorRef<const Tensor<typename internal::traits<Input>::Scalar,
+                         internal::traits<Input>::NumDimensions,
+                         internal::traits<Input>::Layout, TensorIndex>>
       in(input);
-  TensorRef<Tensor<OutScalar, internal::traits<OutputBackward>::NumDimensions,
+  TensorRef<
+      const Tensor<OutScalar, internal::traits<OutputBackward>::NumDimensions,
                    internal::traits<OutputBackward>::Layout, TensorIndex>>
       out(output_backward);
 

@@ -13,25 +13,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/InitLLVM.h"
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/strings/string_view.h"
+#include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/Location.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "mlir/IR/Operation.h"  // from @llvm-project
-#include "mlir/IR/Types.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/IR/Verifier.h"  // from @llvm-project
 #include "mlir/Support/FileUtilities.h"  // from @llvm-project
-#include "mlir/Translation.h"  // from @llvm-project
+#include "mlir/Tools/mlir-translate/Translation.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/flatbuffer_import.h"
 
 namespace tensorflow {
@@ -55,12 +55,6 @@ static mlir::OwningOpRef<mlir::ModuleOp> FlatBufferFileToMlirTranslation(
 std::string FlatBufferFileToMlir(const std::string& model_file_or_buffer,
                                  bool input_is_filepath) {
   // referred logic from mlir::mlirTranslateMain().
-  int argc = 2;
-  const char* argv_array[2];
-  const char** argv = argv_array;
-  argv[0] = "flatbuffer_to_mlir";
-  argv[1] = input_is_filepath ? model_file_or_buffer.c_str() : "flatbuffer";
-  llvm::InitLLVM y(argc, argv);
 
   std::string errorMessage;
   std::unique_ptr<llvm::MemoryBuffer> input;

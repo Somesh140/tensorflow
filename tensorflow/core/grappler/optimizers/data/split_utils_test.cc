@@ -203,7 +203,7 @@ TEST(SplitUtilsTest, Basic) {
 
   SplitResults results =
       SplitFunction(orig, {"i1"}, /*num_captured_inputs=*/0, function_library)
-          .ValueOrDie();
+          .value();
   FunctionDef first = results.first_function;
   FunctionDef second = results.second_function;
 
@@ -245,7 +245,7 @@ TEST(SplitUtilsTest, MultiOutput) {
 
   SplitResults results =
       SplitFunction(orig, {"t1"}, /*num_captured_inputs=*/0, function_library)
-          .ValueOrDie();
+          .value();
   FunctionDef first = results.first_function;
   FunctionDef second = results.second_function;
 
@@ -276,7 +276,7 @@ TEST(SplitUtilsTest, MultipleNodesHaveSameInput) {
 
   SplitResults results =
       SplitFunction(orig, {"i1"}, /*num_captured_inputs=*/0, function_library)
-          .ValueOrDie();
+          .value();
   FunctionDef first = results.first_function;
   FunctionDef second = results.second_function;
 
@@ -310,8 +310,7 @@ TEST(SplitUtilsTest, CapturedInputs) {
   for (int num_captured = 0; num_captured <= 4; num_captured++) {
     VLOG(1) << "Number of captured inputs: " << num_captured;
     SplitResults results =
-        SplitFunction(orig, {"add"}, num_captured, function_library)
-            .ValueOrDie();
+        SplitFunction(orig, {"add"}, num_captured, function_library).value();
     FunctionDef first = results.first_function;
     FunctionDef second = results.second_function;
 
@@ -349,7 +348,7 @@ TEST(SplitUtilsTest, ControlOutputs) {
   SplitResults results =
       SplitFunction(orig, {"n1", "n2", "i1"}, /*num_captured_inputs=*/0,
                     function_library)
-          .ValueOrDie();
+          .value();
   FunctionDef first = results.first_function;
   FunctionDef second = results.second_function;
 
@@ -382,7 +381,7 @@ TEST(SplitUtilsTest, Empty) {
 
   SplitResults results =
       SplitFunction(orig, {}, /*num_captured_inputs=*/1, function_library)
-          .ValueOrDie();
+          .value();
   FunctionDef first = results.first_function;
   FunctionDef second = results.second_function;
 
@@ -411,7 +410,7 @@ TEST(SplitUtilsTest, UniqueArgNames) {
 
   SplitResults results =
       SplitFunction(orig, {"add"}, /*num_captured_inputs=*/0, function_library)
-          .ValueOrDie();
+          .value();
   FunctionDef first = results.first_function;
   FunctionDef second = results.second_function;
 
@@ -442,7 +441,7 @@ TEST(SplitUtilsTest, UnimplementedErrors) {
       {{"o1", "i1:output"}});
   ASSERT_THAT(SplitFunction(orig, {"split"}, /*num_captured_inputs=*/0,
                             function_library),
-              testing::StatusIs(
+              absl_testing::StatusIs(
                   error::UNIMPLEMENTED,
                   ::testing::HasSubstr("Splitting a function where an edge is "
                                        "a list of tensors is unsupported.")));
@@ -461,7 +460,7 @@ TEST(SplitUtilsTest, UnimplementedErrors) {
       {{"o1", "i2:output"}});
   ASSERT_THAT(
       SplitFunction(orig, {"i1"}, /*num_captured_inputs=*/0, function_library),
-      testing::StatusIs(
+      absl_testing::StatusIs(
           error::UNIMPLEMENTED,
           ::testing::HasSubstr(
               "edge between functions has an AttrValue placeholder dtype")));
@@ -487,7 +486,7 @@ TEST(SplitUtilsTest, EdgeFromSecondToFirstError) {
 
   ASSERT_THAT(
       SplitFunction(orig, {"i2"}, /*num_captured_inputs=*/0, function_library),
-      testing::StatusIs(
+      absl_testing::StatusIs(
           error::INTERNAL,
           ::testing::HasSubstr("Node i2 is in first function but has input "
                                "i1:output which is not in first function")));

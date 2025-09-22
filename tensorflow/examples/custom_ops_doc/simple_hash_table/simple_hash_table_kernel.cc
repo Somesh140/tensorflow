@@ -13,13 +13,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_cat.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/op_requires.h"
+#include "tensorflow/core/framework/resource_base.h"
+#include "tensorflow/core/framework/resource_handle.h"
+#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/gtl/map_util.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/mutex.h"
+#include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/platform/strcat.h"
+#include "tensorflow/core/platform/tstring.h"
+#include "tensorflow/core/platform/types.h"
+#include "tsl/platform/thread_annotations.h"
 
 // Please use the appropriate namespace for your project
 namespace tensorflow {
@@ -40,7 +58,7 @@ class SimpleHashTableResource : public ::tensorflow::ResourceBase {
 
     mutex_lock l(mu_);
     table_[key_val] = value_val;
-    return Status::OK();
+    return OkStatus();
   }
 
   Status Find(const Tensor& key, Tensor* value, const Tensor& default_value) {
@@ -55,7 +73,7 @@ class SimpleHashTableResource : public ::tensorflow::ResourceBase {
     const K key_val = key.flat<K>()(0);
     auto value_val = value->flat<V>();
     value_val(0) = gtl::FindWithDefault(table_, key_val, default_val);
-    return Status::OK();
+    return OkStatus();
   }
 
   Status Remove(const Tensor& key) {
@@ -65,7 +83,7 @@ class SimpleHashTableResource : public ::tensorflow::ResourceBase {
     if (table_.erase(key_val) != 1) {
       return errors::NotFound("Key for remove not found: ", key_val);
     }
-    return Status::OK();
+    return OkStatus();
   }
 
   // Save all key, value pairs to tensor outputs to support SavedModel
@@ -85,7 +103,7 @@ class SimpleHashTableResource : public ::tensorflow::ResourceBase {
       keys_data(i) = it->first;
       values_data(i) = it->second;
     }
-    return Status::OK();
+    return OkStatus();
   }
 
   // Load all key, value pairs from tensor inputs to support SavedModel
@@ -98,7 +116,7 @@ class SimpleHashTableResource : public ::tensorflow::ResourceBase {
     for (int64_t i = 0; i < key_values.size(); ++i) {
       gtl::InsertOrUpdate(&table_, key_values(i), value_values(i));
     }
-    return Status::OK();
+    return OkStatus();
   }
 
   // Create a debug string with the content of the map if this is small,
@@ -112,16 +130,16 @@ class SimpleHashTableResource : public ::tensorflow::ResourceBase {
     mutex_lock l(mu_);
     for (const auto& pair : table_) {
       if (count >= num_pairs) {
-        strings::StrAppend(&rval, "...");
+        absl::StrAppend(&rval, "...");
         break;
       }
-      std::string kv_str = strings::StrCat(pair.first, ": ", pair.second);
-      strings::StrAppend(&rval, kv_str.substr(0, max_kv_str_len));
-      if (kv_str.length() > max_kv_str_len) strings::StrAppend(&rval, " ...");
-      strings::StrAppend(&rval, ", ");
+      std::string kv_str = absl::StrCat(pair.first, ": ", pair.second);
+      absl::StrAppend(&rval, kv_str.substr(0, max_kv_str_len));
+      if (kv_str.length() > max_kv_str_len) absl::StrAppend(&rval, " ...");
+      absl::StrAppend(&rval, ", ");
       count += 1;
     }
-    strings::StrAppend(&rval, "}");
+    absl::StrAppend(&rval, "}");
     return rval;
   }
 
@@ -150,7 +168,8 @@ class SimpleHashTableCreateOpKernel : public OpKernel {
 
  private:
   // Just to be safe, avoid accidentally copying the kernel.
-  TF_DISALLOW_COPY_AND_ASSIGN(SimpleHashTableCreateOpKernel);
+  SimpleHashTableCreateOpKernel(const SimpleHashTableCreateOpKernel&) = delete;
+  void operator=(const SimpleHashTableCreateOpKernel&) = delete;
 };
 
 // GetResource retrieves a Resource using a handle from the first
@@ -163,7 +182,7 @@ Status GetResource(OpKernelContext* ctx,
   const ResourceHandle& handle = handle_tensor.scalar<ResourceHandle>()();
   typedef SimpleHashTableResource<K, V> resource_type;
   TF_ASSIGN_OR_RETURN(*resource, handle.GetResource<resource_type>());
-  return Status::OK();
+  return OkStatus();
 }
 
 template <class K, class V>

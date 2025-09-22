@@ -2,9 +2,13 @@
 # Java Native Interface (JNI) library intended for implementing the
 # TensorFlow Lite Flex delegate for using TensorFlow ops with TensorFlow Lite.
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//tensorflow/lite:build_def.bzl", "tflite_copts")
 
-package(default_visibility = ["//visibility:public"])
+package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    default_visibility = ["//visibility:public"],
+)
 
 licenses(["notice"])
 

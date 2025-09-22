@@ -15,7 +15,13 @@ limitations under the License.
 
 #include "tensorflow/compiler/jit/mark_for_compilation_pass.h"
 
+#include <algorithm>
+#include <memory>
+#include <set>
 #include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/memory/memory.h"
@@ -196,6 +202,24 @@ TEST(XlaCompilationTest, StringUnsupported) {
   EXPECT_TRUE(clusters.empty());
 }
 
+TEST(XlaCompilationTest, WhereUnsupported) {
+  std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
+  {
+    GraphDefBuilder builder(GraphDefBuilder::kFailImmediately);
+    Node* a = ops::SourceOp("Const", builder.opts()
+                                         .WithName("A")
+                                         .WithAttr("dtype", DT_INT32)
+                                         .WithAttr("value", Tensor()));
+    Node* b = ops::UnaryOp("Where", a, builder.opts().WithName("B"));
+    ops::BinaryOp("Gather", b, a, builder.opts().WithName("C"));
+    TF_EXPECT_OK(GraphDefBuilderToGraph(builder, graph.get()));
+  }
+
+  TF_ASSERT_OK(MarkForCompilationPassTestHelper::MarkForCompilation(&graph));
+  auto clusters = GetClusters(*graph);
+  EXPECT_TRUE(!clusters.empty());
+}
+
 TEST(XlaCompilationTest, HalfSupported) {
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
   {
@@ -350,8 +374,8 @@ TEST(XlaCompilationTest, CallXlaDeviceFuncWithResourceOp) {
   EXPECT_NE(clusters["A"], "");
 }
 
-static Status GradForUnaryCwise(FunctionDef* g,
-                                std::vector<FunctionDefHelper::Node> nodes) {
+static absl::Status GradForUnaryCwise(
+    FunctionDef* g, std::vector<FunctionDefHelper::Node> nodes) {
   for (auto& n : nodes) {
     if (n.attr.empty()) {
       n.attr = {{"T", DT_FLOAT}};
@@ -366,11 +390,11 @@ static Status GradForUnaryCwise(FunctionDef* g,
       {},
       // Nodes
       nodes);
-  return Status::OK();
+  return absl::OkStatus();
 }
 
 // A gradient containing only supported operators
-Status SupportedGrad(const AttrSlice& attrs, FunctionDef* g) {
+absl::Status SupportedGrad(const AttrSlice& attrs, FunctionDef* g) {
   // clang-format off
   return GradForUnaryCwise(g, {
       {{"y"}, "Tanh", {"x"}},
@@ -384,7 +408,7 @@ Status SupportedGrad(const AttrSlice& attrs, FunctionDef* g) {
 REGISTER_OP_GRADIENT("Supported", SupportedGrad);
 
 // A gradient containing an unsupported operator.
-Status UnsupportedGrad(const AttrSlice& attrs, FunctionDef* g) {
+absl::Status UnsupportedGrad(const AttrSlice& attrs, FunctionDef* g) {
   // clang-format off
   return GradForUnaryCwise(g, {
       {{"y"}, "Tanh", {"x"}},
@@ -593,9 +617,9 @@ TEST(XlaCompilationTest, CyclesWithDifferentScopesAndBridge) {
   // The computation is: C = A @ relu(A)
   // where A sits in ScopeA, relu(A) sits in ScopeB, and C sits in ScopeC.
   // In this case, we cannot fuse anything.
-  EXPECT_EQ(3, clusters.size());
+  EXPECT_EQ(2, clusters.size());
   EXPECT_NE(clusters["A"], clusters["B"]);
-  EXPECT_EQ(clusters["B"], clusters["C"]);
+  EXPECT_NE(clusters["B"], clusters["C"]);
 }
 
 TEST(XlaCompilationTest, DontClusterNodesWithMismatchingDeadness) {
@@ -775,7 +799,7 @@ TEST(XlaCompilationTest, IllegalCycle_UsefulErrorMessage) {
       NodeDef def;
       TF_CHECK_OK(builder.Finalize(&def));
 
-      Status status;
+      absl::Status status;
       Node* node = graph->AddNode(def, &status);
       TF_CHECK_OK(status);
       return node;
@@ -791,7 +815,8 @@ TEST(XlaCompilationTest, IllegalCycle_UsefulErrorMessage) {
 
   TF_EXPECT_OK(root.ToGraph(graph.get()));
 
-  Status status = MarkForCompilationPassTestHelper::MarkForCompilation(&graph);
+  absl::Status status =
+      MarkForCompilationPassTestHelper::MarkForCompilation(&graph);
   EXPECT_FALSE(status.ok());
   EXPECT_TRUE(absl::StrContains(status.ToString(),
                                 "Edge from c to a would create a cycle.\n"
@@ -985,7 +1010,7 @@ TEST(XlaCompilationTest, RandomShapeWithFunc) {
   NodeDef call_node;
   call_node.set_name("fn_call");
   call_node.set_op("Stateful_func");
-  Status status;
+  absl::Status status;
   Node* call = root.graph()->AddNode(call_node, &status);
   TF_ASSERT_OK(status);
 
@@ -998,7 +1023,7 @@ TEST(XlaCompilationTest, RandomShapeWithFunc) {
 
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
   TF_ASSERT_OK(root.ToGraph(graph.get()));
-  auto fld = absl::make_unique<FunctionLibraryDefinition>(OpRegistry::Global(),
+  auto fld = std::make_unique<FunctionLibraryDefinition>(OpRegistry::Global(),
                                                           flib_def);
   TF_ASSERT_OK(
       MarkForCompilationPassTestHelper::MarkForCompilation(&graph, fld.get()));
@@ -1792,7 +1817,7 @@ TEST(XlaCompilationTest, DeterministicClusterNames) {
           " rhs: ", rhs_cluster_name);
     }
 
-    return Status::OK();
+    return absl::OkStatus();
   };
 
   testing::ResetClusterSequenceNumber();
@@ -1835,6 +1860,32 @@ TEST(XlaCompilationTest, DeterministicClusterNames) {
   // clusters0/2 should differ from clusters1/3
 }
 
+TEST(XlaCompilationTest, ClusterSessionName) {
+  Scope root = Scope::NewRootScope().ExitOnError();
+  Output variable = ops::Variable(root.WithOpName("variable"),
+                                  PartialTensorShape{}, DT_FLOAT);
+  Output read = ops::Identity(root.WithOpName("read"), variable);
+  Output neg = ops::Negate(root.WithOpName("negate"), read);
+  Output add = ops::Add(root.WithOpName("add"), neg, neg);
+  std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
+
+  TF_ASSERT_OK(root.ToGraph(graph.get()));
+  auto options = MarkForCompilationPassTestHelper::Options().WithSessionName(
+      "test_session_name");
+  TF_ASSERT_OK(
+      MarkForCompilationPassTestHelper::MarkForCompilation(&graph, options));
+
+  std::unordered_map<string, string> clusters = GetClusters(*graph);
+
+  ASSERT_FALSE(clusters.empty());
+  string cluster_name = clusters.begin()->second;
+
+  std::unordered_map<string, string> expected_clusters(
+      {{"negate", cluster_name}, {"add", cluster_name}});
+  EXPECT_EQ(clusters, expected_clusters);
+  EXPECT_THAT(cluster_name, ::testing::StartsWith("test_session_name"));
+}
+
 namespace {
 Node* MakeStageNode(GraphDefBuilder& builder, string name,
                     std::initializer_list<DataType> dtypes,
@@ -1853,7 +1904,7 @@ Node* MakeStageNode(GraphDefBuilder& builder, string name,
 }  // namespace
 
 TEST(XlaCompilationTest, StagePipelinePreservedByClusterScopingPass) {
-  auto build_staged_graph = [](std::unique_ptr<Graph>* graph) -> Status {
+  auto build_staged_graph = [](std::unique_ptr<Graph>* graph) -> absl::Status {
     // Construct a graph as below with two pipeline stages and test that nodes
     // in different stages will not be merged if ClusterScopingPass is on.
     //
@@ -1946,7 +1997,7 @@ TEST(XlaCompilationTest, XLALiteAllowlist) {
     }
   }
   EXPECT_TRUE(unknow_op.empty())
-      << "Someone added support for a new TF opeations inside XLA. They must "
+      << "Someone added support for a new TF operations inside XLA. They must "
          "be included in the XLALite allowlist or denylist:\n"
       << absl::StrJoin(unknow_op, "\n");
 }

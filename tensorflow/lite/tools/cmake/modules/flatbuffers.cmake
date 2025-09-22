@@ -17,14 +17,15 @@ if(TARGET flatbuffers OR flatbuffers_POPULATED)
   return()
 endif()
 
-include(FetchContent)
+include(OverridableFetchContent)
 
 OverridableFetchContent_Declare(
   flatbuffers
   GIT_REPOSITORY https://github.com/google/flatbuffers
-  # Sync with tensorflow/third_party/flatbuffers/workspace.bzl
-  GIT_TAG v1.12.0
-  GIT_SHALLOW TRUE
+  # Keep in sync with tensorflow/third_party/flatbuffers/workspace.bzl
+  GIT_TAG v25.2.10
+  # NOTE: b/340264458 - `GIT_SHALLOW TRUE` works for tag name only.
+  GIT_SHALLOW FALSE
   GIT_PROGRESS TRUE
   SOURCE_DIR "${CMAKE_BINARY_DIR}/flatbuffers"
 )
@@ -41,7 +42,6 @@ add_definitions(-DNOMINMAX=1)
 add_subdirectory(
   "${flatbuffers_SOURCE_DIR}"
   "${flatbuffers_BINARY_DIR}"
-  EXCLUDE_FROM_ALL
 )
 remove_definitions(-DNOMINMAX)
 

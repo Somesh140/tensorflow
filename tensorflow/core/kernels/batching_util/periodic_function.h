@@ -52,13 +52,12 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_KERNELS_BATCHING_UTIL_PERIODIC_FUNCTION_H_
 #define TENSORFLOW_CORE_KERNELS_BATCHING_UTIL_PERIODIC_FUNCTION_H_
 
-#include "tensorflow/core/kernels/batching_util/periodic_function.h"
-
 #include <functional>
 #include <memory>
 #include <string>
 
-#include "tensorflow/core/lib/core/notification.h"
+#include "absl/functional/any_invocable.h"
+#include "absl/synchronization/notification.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/types.h"
@@ -97,8 +96,8 @@ class PeriodicFunction {
   };
 
   // Also starts the background thread which will be calling the function.
-  PeriodicFunction(const std::function<void()>& function,
-                   int64_t interval_micros, const Options& options = Options());
+  PeriodicFunction(absl::AnyInvocable<void()> function, int64_t interval_micros,
+                   const Options& options = Options());
 
   ~PeriodicFunction();
 
@@ -111,17 +110,18 @@ class PeriodicFunction {
   // (Blocking.) Loops forever calling "function_" every "interval_micros_".
   void RunLoop(int64_t start);
 
-  const std::function<void()> function_;  // Actual client function
+  absl::AnyInvocable<void()> function_;   // Actual client function
   const int64_t interval_micros_;         // Interval between calls.
   const Options options_;
 
   // Used to notify the thread to stop.
-  Notification stop_thread_;
+  absl::Notification stop_thread_;
 
   // Thread for running "function_"
   std::unique_ptr<Thread> thread_ = nullptr;
 
-  TF_DISALLOW_COPY_AND_ASSIGN(PeriodicFunction);
+  PeriodicFunction(const PeriodicFunction&) = delete;
+  void operator=(const PeriodicFunction&) = delete;
 };
 
 }  // namespace serving

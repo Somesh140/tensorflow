@@ -15,8 +15,10 @@ limitations under the License.
 
 #include "tensorflow/java/src/main/native/graph_jni.h"
 
+#include <cstddef>
 #include <limits>
 #include <memory>
+
 #include "tensorflow/c/c_api.h"
 #include "tensorflow/java/src/main/native/exception_jni.h"
 #include "tensorflow/java/src/main/native/utils_jni.h"
@@ -163,7 +165,7 @@ JNIEXPORT jlongArray JNICALL Java_org_tensorflow_Graph_addGradients(
                      "expected %d, got %d dx handles", ny,
                      env->GetArrayLength(dx_handles));
     }
-    dx.reset(new TF_Output[ny]);
+    dx = std::make_unique<TF_Output[]>(ny);
     resolveOutputs(env, "dx", dx_handles, dx_indices, dx.get(), ny);
   }
   if (env->ExceptionCheck()) return nullptr;

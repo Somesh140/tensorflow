@@ -20,7 +20,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
-#include "tensorflow/core/lib/core/notification.h"
+#include "absl/synchronization/notification.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/macros.h"
@@ -62,11 +62,12 @@ class FakeClockEnv : public EnvWrapper {
 
   struct SleepingThread {
     uint64 wake_time;
-    Notification* wake_notification;
+    absl::Notification* wake_notification;
   };
   std::vector<SleepingThread> sleeping_threads_ TF_GUARDED_BY(mu_);
 
-  TF_DISALLOW_COPY_AND_ASSIGN(FakeClockEnv);
+  FakeClockEnv(const FakeClockEnv&) = delete;
+  void operator=(const FakeClockEnv&) = delete;
 };
 
 }  // namespace test_util

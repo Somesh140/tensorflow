@@ -37,7 +37,7 @@ namespace tensorflow {
   static ProcessState* instance = new ProcessState;
   static absl::once_flag f;
   absl::call_once(f, []() {
-    AllocatorFactoryRegistry::singleton()->process_state_ = instance;
+    AllocatorFactoryRegistry::singleton()->SetProcessState(instance);
   });
 
   return instance;
@@ -77,10 +77,10 @@ Allocator* ProcessState::GetCPUAllocator(int numa_node) {
     const bool alloc_visitors_defined =
         (!cpu_alloc_visitors_.empty() || !cpu_free_visitors_.empty());
     bool use_bfc_allocator = false;
-    Status status = ReadBoolFromEnvVar(
+    absl::Status status = ReadBoolFromEnvVar(
         "TF_CPU_ALLOCATOR_USE_BFC", alloc_visitors_defined, &use_bfc_allocator);
     if (!status.ok()) {
-      LOG(ERROR) << "GetCPUAllocator: " << status.error_message();
+      LOG(ERROR) << "GetCPUAllocator: " << status.message();
     }
     Allocator* allocator = nullptr;
     SubAllocator* sub_allocator =
@@ -92,11 +92,11 @@ Allocator* ProcessState::GetCPUAllocator(int numa_node) {
     if (use_bfc_allocator) {
       // TODO(reedwm): evaluate whether 64GB by default is the best choice.
       int64_t cpu_mem_limit_in_mb = -1;
-      Status status = ReadInt64FromEnvVar("TF_CPU_BFC_MEM_LIMIT_IN_MB",
-                                          1LL << 16 /*64GB max by default*/,
-                                          &cpu_mem_limit_in_mb);
+      absl::Status status = ReadInt64FromEnvVar(
+          "TF_CPU_BFC_MEM_LIMIT_IN_MB", 1LL << 16 /*64GB max by default*/,
+          &cpu_mem_limit_in_mb);
       if (!status.ok()) {
-        LOG(ERROR) << "GetCPUAllocator: " << status.error_message();
+        LOG(ERROR) << "GetCPUAllocator: " << status.message();
       }
       int64_t cpu_mem_limit = cpu_mem_limit_in_mb * (1LL << 20);
       DCHECK(sub_allocator);

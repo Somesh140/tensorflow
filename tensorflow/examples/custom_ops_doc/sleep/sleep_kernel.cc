@@ -13,6 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
+
+#include "absl/log/log.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -39,7 +42,7 @@ class AsyncSleepOp : public AsyncOpKernel {
   // implementation of ComputeAsync() must not block on the execution of another
   // OpKernel. `done` may be called by the current thread, or by another thread.
   // `context` is guaranteed to stay alive until the `done` callback starts.
-  // For example, use OP_REQUIRES_ASYNC which takes the `done` paramater
+  // For example, use OP_REQUIRES_ASYNC which takes the `done` parameter
   // as an input and calls `done` for the case of exiting early with an error
   // (instead of OP_REQUIRES).
   //
@@ -78,7 +81,7 @@ class AsyncSleepOp : public AsyncOpKernel {
     thread_pool->Schedule([this, output_tensor, when, done] {
       this->sleeper(output_tensor, when, done);
     });
-    // Note that `done` is normaly called by sleeper(), it is not normally
+    // Note that `done` is normally called by sleeper(), it is not normally
     // called by this function.
   }
 
