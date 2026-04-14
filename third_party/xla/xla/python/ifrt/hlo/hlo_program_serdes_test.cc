@@ -21,6 +21,7 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -36,7 +37,6 @@ limitations under the License.
 #include "xla/python/ifrt/serdes.pb.h"
 #include "xla/python/ifrt/serdes_test_util.h"
 #include "xla/python/ifrt/serdes_version.h"
-#include "xla/tsl/platform/status_matchers.h"
 #include "xla/tsl/platform/statusor.h"
 
 namespace xla {
@@ -45,7 +45,6 @@ namespace {
 
 using ::testing::HasSubstr;
 using ::testing::Not;
-using ::tsl::testing::StatusIs;
 
 class HloProgramSerDesTest : public testing::TestWithParam<SerDesVersion> {
  public:
@@ -87,7 +86,7 @@ module {
 
   // Verify that the deserialized program has no MHLO ops.
   bool has_unsupported_dialect = false;
-  xla_program->mlir_module()->walk([&](mlir::Operation *op) {
+  xla_program->mlir_module()->walk([&](mlir::Operation* op) {
     if (!llvm::isa<mlir::BuiltinDialect, mlir::func::FuncDialect,
                    mlir::stablehlo::StablehloDialect>(op->getDialect())) {
       LOG(ERROR) << "Found an op with an unsupported dialect: "
@@ -155,7 +154,10 @@ module {
 
 INSTANTIATE_TEST_SUITE_P(
     SerDesVersion, HloProgramSerDesTest,
-    testing::ValuesIn(test_util::Week4OldOrLaterSerDesVersions()));
+    testing::ValuesIn(test_util::Week4OldOrLaterSerDesVersions()),
+    [](const testing::TestParamInfo<SerDesVersion>& info) {
+      return absl::StrCat(info.param.version_number().value());
+    });
 
 }  // namespace
 }  // namespace ifrt

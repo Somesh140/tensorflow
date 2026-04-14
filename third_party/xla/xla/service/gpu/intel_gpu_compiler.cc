@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "xla/service/gpu/intel_gpu_compiler.h"
 
+#include "xla/service/dump.h"
+#include "xla/service/gpu/llvm_gpu_backend/spirv_backend.h"
 #include "xla/service/gpu/target_constants.h"
 #include "xla/stream_executor/sycl/sycl_platform_id.h"
 
@@ -26,10 +28,24 @@ IntelGpuCompiler::IntelGpuCompiler()
                   spir::DataLayout()) {}
 
 absl::Status IntelGpuCompiler::OptimizeHloConvolutionCanonicalization(
-    HloModule* hlo_module, se::GpuComputeCapability gpu_version,
+    HloModule* hlo_module, const se::GpuComputeCapability& gpu_version,
     se::dnn::VersionInfo dnn_version,
-    const se::SemanticVersion& toolkit_version) {
-  // Note: this is a stub.
+    const se::SemanticVersion& toolkit_version,
+    CompilationStats* compilation_stats) {
+  // Return OkStatus as a stub.
+  return absl::OkStatus();
+}
+
+absl::Status IntelGpuCompiler::AddConvAndGemmAutotuningPass(
+    HloPassPipeline* pipeline, HloModule* hlo_module,
+    const se::GpuComputeCapability& gpu_version, const CompileOptions& options,
+    tsl::thread::ThreadPool* thread_pool, se::StreamExecutor* stream_exec,
+    const Compiler::GpuTargetConfig* target_config,
+    const MultiProcessKeyValueStore& key_value_store,
+    const se::SemanticVersion& toolkit_version, const AliasInfo* alias_info,
+    const DebugOptions& debug_options, mlir::MLIRContext* mlir_context,
+    HloCostAnalysis::ShapeSizeFunction shape_size_fn) {
+  // Return OkStatus as a stub.
   return absl::OkStatus();
 }
 
@@ -38,14 +54,29 @@ IntelGpuCompiler::CompileTargetBinary(
     const HloModuleConfig& module_config, llvm::Module* llvm_module,
     const stream_executor::DeviceDescription& device_description,
     bool relocatable, const HloModule* debug_module,
-    const CompileOptions& options, std::optional<int> shard_number) {
-  // Note: this is a stub.
-  return BackendCompileResult{};
+    std::optional<int> shard_number) {
+  TF_ASSIGN_OR_RETURN(
+      auto spirv_str,
+      spirv::CompileToSPIRV(llvm_module,
+                            device_description.gpu_compute_capability(),
+                            module_config.debug_options()));
+  if (DumpingEnabledForHloModule(debug_module ? debug_module->name() : "",
+                                 module_config.debug_options())) {
+    if (debug_module) {
+      DumpToFileInDirOrStdout(*debug_module, "", "spv", spirv_str);
+    } else {
+      LOG(ERROR) << "Dumping is not implemented since the file name cannot be "
+                    "inferred. Please implement (potentially MLIR) module -> "
+                    "filename heuristic.";
+    }
+  }
+  std::vector<uint8_t> spirv_bin(spirv_str.begin(), spirv_str.end());
+  return BackendCompileResult{/*asm_text=*/"", std::move(spirv_bin)};
 }
 
 std::vector<std::string> IntelGpuCompiler::GetLLVMCommandLineOptions(
     const DebugOptions& debug_options) const {
-  return {};
+  return spirv::GetSPIRVBackendOptions(debug_options);
 }
 
 }  // namespace gpu

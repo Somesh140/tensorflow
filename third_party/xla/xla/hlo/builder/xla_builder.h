@@ -371,6 +371,11 @@ class XlaBuilder {
   // Returns the OpSharding that will be attached to all instructions.
   const std::optional<OpSharding>& sharding() const { return sharding_; }
 
+  // Returns the OriginalValueProto that will be attached to all instructions.
+  const std::optional<OriginalValueProto>& original_value() const {
+    return original_value_;
+  }
+
   // Sets the builder to a mode where it will die immediately when an error is
   // encountered, rather than producing it in a deferred fashion when Build() is
   // called (which is the default).
@@ -704,7 +709,7 @@ class XlaBuilder {
       std::optional<PrimitiveType> preferred_element_type = std::nullopt);
 
   XlaOp ScaledDot(
-      XlaOp lhs, XlaOp lhs_scale, XlaOp rhs, XlaOp rhs_scale,
+      XlaOp lhs, XlaOp rhs, XlaOp lhs_scale, XlaOp rhs_scale,
       const DotDimensionNumbers& dimension_number,
       const PrecisionConfig* precision_config = nullptr,
       std::optional<PrimitiveType> preferred_element_type = std::nullopt);
@@ -886,6 +891,17 @@ class XlaBuilder {
       const Shape& shape, absl::Span<const XlaOp> all_operands,
       XlaComputationId computation,
       absl::Span<const int64_t> dimensions_to_reduce);
+
+  XlaOp Scan(absl::Span<const XlaOp> inputs, absl::Span<const XlaOp> inits,
+             const XlaComputation& computation, int64_t scan_dimension,
+             std::optional<int64_t> scan_dimension_size = std::nullopt,
+             bool is_reverse = false,
+             TriState is_associative = TRI_STATE_UNSPECIFIED);
+  XlaOp Scan(absl::Span<const XlaOp> inputs, absl::Span<const XlaOp> inits,
+             XlaComputationId computation, int64_t scan_dimension,
+             std::optional<int64_t> scan_dimension_size = std::nullopt,
+             bool is_reverse = false,
+             TriState is_associative = TRI_STATE_UNSPECIFIED);
 
   XlaOp ReduceAll(XlaOp operand, XlaOp init_value,
                   XlaComputationId computation);
@@ -1440,7 +1456,7 @@ class XlaBuilder {
                          const RaggedDotDimensionNumbers& dimension_numbers,
                          const PrecisionConfig* precision_config,
                          std::optional<PrimitiveType> preferred_element_type);
-  friend XlaOp ScaledDot(XlaOp lhs, XlaOp lhs_scale, XlaOp rhs, XlaOp rhs_scale,
+  friend XlaOp ScaledDot(XlaOp lhs, XlaOp rhs, XlaOp lhs_scale, XlaOp rhs_scale,
                          const DotDimensionNumbers& dimension_number,
                          const PrecisionConfig* precision_config,
                          std::optional<PrimitiveType> preferred_element_type);
@@ -1633,6 +1649,16 @@ class XlaBuilder {
                       absl::Span<const XlaOp> init_values,
                       XlaComputationId computation,
                       absl::Span<const int64_t> dimensions_to_reduce);
+  friend XlaOp Scan(absl::Span<const XlaOp> inputs,
+                    absl::Span<const XlaOp> inits,
+                    const XlaComputation& computation, int64_t scan_dimension,
+                    std::optional<int64_t> scan_dimension_size, bool is_reverse,
+                    TriState is_associative);
+  friend XlaOp Scan(absl::Span<const XlaOp> inputs,
+                    absl::Span<const XlaOp> inits, XlaComputationId computation,
+                    int64_t scan_dimension,
+                    std::optional<int64_t> scan_dimension_size, bool is_reverse,
+                    TriState is_associative);
   friend XlaOp ReduceAll(XlaOp operand, XlaOp init_value,
                          const XlaComputation& computation);
   friend XlaOp ReduceWindow(XlaOp operand, XlaOp init_value,
@@ -1731,11 +1757,23 @@ class XlaBuilder {
       absl::Span<const std::pair<int64_t, int64_t>> padding, XlaOp source,
       XlaOp init_value, XlaComputationId scatter);
   friend XlaOp Abs(XlaOp operand);
+  friend XlaOp Acos(XlaOp x,
+                    const std::optional<ResultAccuracy>& result_accuracy,
+                    bool expand);
   friend XlaOp Acosh(XlaOp x,
+                     const std::optional<ResultAccuracy>& result_accuracy,
+                     bool expand);
+  friend XlaOp Asin(XlaOp x,
+                    const std::optional<ResultAccuracy>& result_accuracy,
+                    bool expand);
+  friend XlaOp Asinh(XlaOp x,
                      const std::optional<ResultAccuracy>& result_accuracy,
                      bool expand);
   friend XlaOp Atan2(XlaOp y, XlaOp x,
                      absl::Span<const int64_t> broadcast_dimensions);
+  friend XlaOp Atanh(XlaOp x,
+                     const std::optional<ResultAccuracy>& result_accuracy,
+                     bool expand);
   friend XlaOp Erf(XlaOp operand,
                    const std::optional<ResultAccuracy>& result_accuracy);
   friend XlaOp Exp(XlaOp operand,
@@ -1756,8 +1794,14 @@ class XlaBuilder {
   friend XlaOp Clz(XlaOp operand);
   friend XlaOp Cos(XlaOp operand,
                    const std::optional<ResultAccuracy>& result_accuracy);
+  friend XlaOp Cosh(XlaOp x,
+                    const std::optional<ResultAccuracy>& result_accuracy,
+                    bool expand);
   friend XlaOp Sin(XlaOp operand,
                    const std::optional<ResultAccuracy>& result_accuracy);
+  friend XlaOp Sinh(XlaOp x,
+                    const std::optional<ResultAccuracy>& result_accuracy,
+                    bool expand);
   friend XlaOp Tan(XlaOp operand,
                    const std::optional<ResultAccuracy>& result_accuracy);
   friend XlaOp Tanh(XlaOp operand,
@@ -1982,10 +2026,8 @@ class XlaScopedOriginalValueAssignment {
   XlaScopedOriginalValueAssignment(
       xla::XlaBuilder* builder,
       std::optional<OriginalValueProto> original_value_proto)
-      : builder_(builder) {
-    if (original_value_proto.has_value()) {
-      builder_->SetOriginalValue(original_value_proto.value());
-    }
+      : builder_(builder), prev_original_value_(builder->original_value()) {
+    SetOriginalValue(original_value_proto);
   }
 
   XlaScopedOriginalValueAssignment(const XlaScopedOriginalValueAssignment&) =
@@ -1993,11 +2035,22 @@ class XlaScopedOriginalValueAssignment {
   XlaScopedOriginalValueAssignment& operator=(
       const XlaScopedOriginalValueAssignment&) = delete;
 
-  ~XlaScopedOriginalValueAssignment() { builder_->ClearOriginalValue(); }
+  ~XlaScopedOriginalValueAssignment() {
+    SetOriginalValue(prev_original_value_);
+  }
 
  private:
+  void SetOriginalValue(
+      const std::optional<OriginalValueProto>& original_value_proto) {
+    if (original_value_proto.has_value()) {
+      builder_->SetOriginalValue(original_value_proto.value());
+    } else {
+      builder_->ClearOriginalValue();
+    }
+  }
+
   xla::XlaBuilder* const builder_;
-  std::optional<OpSharding> prev_sharding_;
+  std::optional<OriginalValueProto> prev_original_value_;
 };
 
 // RAII-style object: save the current builder's frontend attributes, and merge
@@ -2739,6 +2792,18 @@ XlaOp Reduce(XlaBuilder* builder, absl::Span<const XlaOp> operands,
 XlaOp Reduce(XlaBuilder* builder, absl::Span<const XlaOp> operands,
              absl::Span<const XlaOp> init_values, XlaComputationId computation,
              absl::Span<const int64_t> dimensions_to_reduce);
+
+// Enqueues a scan instruction onto the computation.
+XlaOp Scan(absl::Span<const XlaOp> inputs, absl::Span<const XlaOp> inits,
+           const XlaComputation& computation, int64_t scan_dimension,
+           std::optional<int64_t> scan_dimension_size = std::nullopt,
+           bool is_reverse = false,
+           TriState is_associative = TRI_STATE_UNSPECIFIED);
+XlaOp Scan(absl::Span<const XlaOp> inputs, absl::Span<const XlaOp> inits,
+           XlaComputationId computation, int64_t scan_dimension,
+           std::optional<int64_t> scan_dimension_size = std::nullopt,
+           bool is_reverse = false,
+           TriState is_associative = TRI_STATE_UNSPECIFIED);
 
 // Convenience wrapper around the above that reduces all the dimensions in the
 // operand shape.

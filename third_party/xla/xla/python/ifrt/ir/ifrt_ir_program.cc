@@ -20,9 +20,11 @@ limitations under the License.
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
@@ -71,8 +73,13 @@ IfrtIRCompileOptions::FromProto(const IfrtIrCompileOptionsProto& proto) {
                      " for IfrtIRCompileOptions deserialization"));
   }
 
-  auto compile_options_overrides = std::make_unique<absl::flat_hash_map<
-      std::string, std::unique_ptr<xla::ifrt::CompileOptions>>>();
+  if (proto.propagate_shardings()) {
+    return absl::InvalidArgumentError(
+        "IfrtIrCompileOptionsProto.propagate_shardings is deprecated");
+  }
+
+  auto compile_options_overrides = std::make_unique<
+      absl::flat_hash_map<std::string, std::unique_ptr<CompileOptions>>>();
   compile_options_overrides->reserve(proto.compile_option_overrides_size());
 
   std::vector<DeviceId> device_ids;
@@ -94,24 +101,24 @@ IfrtIRCompileOptions::FromProto(const IfrtIrCompileOptionsProto& proto) {
   return std::make_unique<IfrtIRCompileOptions>(
       std::move(device_ids),
       absl::flat_hash_map<std::string, LoadedExecutableRef>(),
-      std::move(compile_options_overrides), proto.propagate_shardings(),
-      proto.mlir_dump_to(), proto.mlir_dump_pass_re(),
-      proto.mlir_dump_func_re(), proto.mlir_enable_timing(),
-      proto.dot_graph_dump_to(),
+      std::move(compile_options_overrides), proto.mlir_dump_to(),
+      proto.mlir_dump_pass_re(), proto.mlir_dump_func_re(),
+      proto.mlir_enable_timing(), proto.dot_graph_dump_to(),
       proto.dot_graph_min_executable_peak_memory_bytes(),
       proto.dot_graph_min_executable_flops(),
-      proto.dot_graph_min_per_device_transfer_size_bytes());
+      proto.dot_graph_min_per_device_transfer_size_bytes(),
+      proto.strict_memory_reservation());
 }
 
-absl::StatusOr<IfrtIrCompileOptionsProto> IfrtIRCompileOptions::ToProto(
-    SerDesVersion version) const {
+absl::Status IfrtIRCompileOptions::ToProto(IfrtIrCompileOptionsProto& proto,
+                                           SerDesVersion version) const {
   if (version.version_number() < SerDesVersionNumber(0)) {
     return absl::FailedPreconditionError(
         absl::StrCat("Unsupported ", version.version_number(),
                      " for IfrtIRCompileOptions serialization"));
   }
 
-  IfrtIrCompileOptionsProto proto;
+  proto.Clear();
   proto.set_version_number(SerDesVersionNumber(0).value());
   proto.mutable_device_ids()->Reserve(device_assignments.size());
   for (const DeviceId& device_id : device_assignments) {
@@ -124,15 +131,13 @@ absl::StatusOr<IfrtIrCompileOptionsProto> IfrtIRCompileOptions::ToProto(
             "compile_options must be XlaCompileOptions");
       }
 
-      TF_ASSIGN_OR_RETURN(
-          CompileOptionsProto compile_options_proto,
-          static_cast<xla::ifrt::XlaCompileOptions*>(compile_options.get())
-              ->compile_options.ToProto());
+      TF_ASSIGN_OR_RETURN(CompileOptionsProto compile_options_proto,
+                          static_cast<XlaCompileOptions*>(compile_options.get())
+                              ->compile_options.ToProto());
       proto.mutable_compile_option_overrides()->insert(
           {id, compile_options_proto});
     }
   }
-  proto.set_propagate_shardings(propagate_shardings);
   proto.set_mlir_dump_to(mlir_dump_to);
   proto.set_mlir_dump_pass_re(mlir_dump_pass_re);
   proto.set_mlir_dump_func_re(mlir_dump_func_re);
@@ -143,13 +148,87 @@ absl::StatusOr<IfrtIrCompileOptionsProto> IfrtIRCompileOptions::ToProto(
   proto.set_dot_graph_min_executable_flops(dot_graph_min_executable_flops);
   proto.set_dot_graph_min_per_device_transfer_size_bytes(
       dot_graph_min_per_device_transfer_size_bytes);
-  return proto;
+  proto.set_strict_memory_reservation(strict_memory_reservation);
+  return absl::OkStatus();
+}
+
+absl::Status IfrtIRCompileOptions::SetOptionsFromMap(
+    const absl::flat_hash_map<std::string,
+                              std::variant<std::string, bool, int64_t, double>>&
+        options) {
+  absl::flat_hash_set<std::string> recognized_keys;
+
+#define SET_BOOL_OPTION(field)                                         \
+  if (auto it = options.find(#field); it != options.end()) {           \
+    const bool* v = std::get_if<bool>(&it->second);                    \
+    if (v == nullptr) {                                                \
+      return absl::InvalidArgumentError(                               \
+          absl::StrCat("Option '", #field, "' expects a bool value")); \
+    }                                                                  \
+    field = *v;                                                        \
+    recognized_keys.insert(#field);                                    \
+  }
+
+#define SET_STRING_OPTION(field)                                         \
+  if (auto it = options.find(#field); it != options.end()) {             \
+    const std::string* v = std::get_if<std::string>(&it->second);        \
+    if (v == nullptr) {                                                  \
+      return absl::InvalidArgumentError(                                 \
+          absl::StrCat("Option '", #field, "' expects a string value")); \
+    }                                                                    \
+    field = *v;                                                          \
+    recognized_keys.insert(#field);                                      \
+  }
+
+#define SET_INT64_OPTION(field)                                          \
+  if (auto it = options.find(#field); it != options.end()) {             \
+    const int64_t* v = std::get_if<int64_t>(&it->second);                \
+    if (v == nullptr) {                                                  \
+      return absl::InvalidArgumentError(                                 \
+          absl::StrCat("Option '", #field, "' expects an int64 value")); \
+    }                                                                    \
+    field = *v;                                                          \
+    recognized_keys.insert(#field);                                      \
+  }
+
+#define SET_DOUBLE_OPTION(field)                                        \
+  if (auto it = options.find(#field); it != options.end()) {            \
+    const double* v = std::get_if<double>(&it->second);                 \
+    if (v == nullptr) {                                                 \
+      return absl::InvalidArgumentError(                                \
+          absl::StrCat("Option '", #field, "' expects a float value")); \
+    }                                                                   \
+    field = *v;                                                         \
+    recognized_keys.insert(#field);                                     \
+  }
+
+  SET_BOOL_OPTION(mlir_enable_timing);
+  SET_STRING_OPTION(mlir_dump_to);
+  SET_STRING_OPTION(mlir_dump_pass_re);
+  SET_STRING_OPTION(mlir_dump_func_re);
+  SET_STRING_OPTION(dot_graph_dump_to);
+  SET_INT64_OPTION(dot_graph_min_executable_peak_memory_bytes);
+  SET_INT64_OPTION(dot_graph_min_per_device_transfer_size_bytes);
+  SET_DOUBLE_OPTION(dot_graph_min_executable_flops);
+  SET_BOOL_OPTION(strict_memory_reservation);
+
+#undef SET_BOOL_OPTION
+#undef SET_STRING_OPTION
+#undef SET_INT64_OPTION
+#undef SET_DOUBLE_OPTION
+
+  for (const auto& [key, _] : options) {
+    if (!recognized_keys.contains(key)) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unrecognized IFRT IR compile option: '", key, "'"));
+    }
+  }
+  return absl::OkStatus();
 }
 
 llvm::raw_ostream& operator<<(llvm::raw_ostream& os,
                               const IfrtIRCompileOptions& options) {
-  absl::StatusOr<xla::ifrt::IfrtIrCompileOptionsProto> proto_or =
-      options.ToProto();
+  absl::StatusOr<IfrtIrCompileOptionsProto> proto_or = options.ToProto();
   if (!proto_or.ok()) {
     os << "Failed to convert IfrtIRCompileOptions to proto: "
        << proto_or.status().ToString();

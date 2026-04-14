@@ -36,12 +36,12 @@ limitations under the License.
 #include "xla/python/ifrt/ir/ifrt_ir_compile_options.pb.h"
 #include "xla/python/ifrt/ir/ifrt_ir_program.h"
 #include "xla/python/ifrt/ir/ifrt_ir_program.pb.h"
+#include "xla/python/ifrt/ir/support/module_parsing.h"
 #include "xla/python/ifrt/ir/transforms/passes.h"
 #include "xla/python/ifrt/ir/version.h"
 #include "xla/python/ifrt/serdes.h"
 #include "xla/python/ifrt/serdes_version.h"
 #include "xla/python/ifrt/serdes_week_4_old_version_accessor.h"
-#include "xla/python/ifrt/support/module_parsing.h"
 #include "xla/status_macros.h"
 #include "xla/tsl/platform/statusor.h"
 
@@ -159,7 +159,8 @@ class IfrtIRProgramSerDes
     bool use_existing_context = false;
     std::unique_ptr<mlir::MLIRContext> context;
     if (!deserialize_options || !deserialize_options->context) {
-      context = std::make_unique<mlir::MLIRContext>();
+      context = std::make_unique<mlir::MLIRContext>(
+          mlir::MLIRContext::Threading::DISABLED);
     } else {
       use_existing_context = true;
       context =

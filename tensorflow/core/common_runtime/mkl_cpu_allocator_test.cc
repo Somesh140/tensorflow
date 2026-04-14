@@ -17,7 +17,6 @@ limitations under the License.
 
 #include "tensorflow/core/common_runtime/mkl_cpu_allocator.h"
 
-#include "absl/status/status.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/test.h"

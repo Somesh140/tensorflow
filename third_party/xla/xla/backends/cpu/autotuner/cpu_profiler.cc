@@ -27,11 +27,12 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "xla/backends/autotuner/profiler.h"
 #include "xla/executable_run_options.h"
+#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/literal.h"
 #include "xla/service/buffer_assignment.h"
 #include "xla/service/cpu/cpu_executable.h"
 #include "xla/service/executable.h"
-#include "xla/service/maybe_owning_device_memory.h"
+#include "xla/service/maybe_owning_device_address.h"
 #include "xla/shape_util.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/xla_data.pb.h"
@@ -53,7 +54,7 @@ static absl::StatusOr<std::unique_ptr<InputBuffers>> PrepareBackedBuffers(
     Literal literal(shape, true);
 
     backed_buffers->backing_literals.push_back(std::move(literal));
-    backed_buffers->buffers.emplace_back(stream_executor::DeviceMemoryBase(
+    backed_buffers->buffers.emplace_back(stream_executor::DeviceAddressBase(
         backed_buffers->backing_literals.back().untyped_data(),
         backed_buffers->backing_literals.back().size_bytes()));
   }
@@ -63,7 +64,7 @@ static absl::StatusOr<std::unique_ptr<InputBuffers>> PrepareBackedBuffers(
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<InputBuffers>> CpuProfiler::CreateInputBuffers(
-    const Executable* executable) {
+    const Executable* executable, const HloInstruction*) {
   const CpuExecutable* cpu_executable =
       tsl::down_cast<const CpuExecutable*>(executable);
   return PrepareBackedBuffers(
@@ -94,7 +95,7 @@ absl::StatusOr<ProfileResult> CpuProfiler::Profile(
 }
 
 absl::Status CpuProfiler::Execute(
-    Executable* executable, absl::Span<const MaybeOwningDeviceMemory> buffers,
+    Executable* executable, absl::Span<const MaybeOwningDeviceAddress> buffers,
     ExecutionProfile* profile) {
   ExecutableRunOptions run_options;
   run_options.set_execution_profile(profile);

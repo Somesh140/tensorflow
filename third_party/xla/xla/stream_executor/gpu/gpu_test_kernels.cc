@@ -59,6 +59,14 @@ absl::StatusOr<KernelLoaderSpec> GetAddI32TestKernelSpec(
       .FindKernel<internal::AddI32Kernel>(platform_id);
 }
 
+absl::StatusOr<KernelLoaderSpec>
+GetIncrementBy5I32TestKernelSpecWithCustomArgsPacking(
+    Platform::Id platform_id) {
+  return GpuKernelRegistry::GetGlobalRegistry()
+      .FindKernel<internal::IncrementBy5I32KernelWithCustomArgsPacking>(
+          platform_id);
+}
+
 KernelLoaderSpec GetAddI32PtxKernelSpec() {
   // PTX kernel compiled from:
   //
@@ -122,7 +130,7 @@ KernelLoaderSpec GetTmaPtxKernelSpec() {
   // num_stages: 4 num_warps: 4 num_ctas: 1 is_tma_allowed: true '
   static constexpr absl::string_view kTmaKernelPtx = R"(
 .version 8.2
-.target sm_90a
+.target sm_90
 .address_size 64
 
     // .globl    tma_dot_kernel

@@ -18,17 +18,20 @@ limitations under the License.
 #include <memory>
 #include <string>
 #include <utility>
-#include <variant>
+#include <vector>
 
 #include "absl/log/check.h"
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
+#include "google/protobuf/text_format.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/gpu/model/hlo_op_profile.pb.h"
 #include "xla/service/gpu/model/hlo_op_profiles_data.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "tsl/platform/protobuf.h"
 
 namespace xla {
@@ -44,9 +47,23 @@ namespace gpu {
 
 /*static*/ std::string HloOpProfiles::GetProfileName(
     const se::DeviceDescription& device_info) {
-  if (auto* ptr = std::get_if<stream_executor::CudaComputeCapability>(
-          &device_info.gpu_compute_capability())) {
-    return absl::StrCat("sm_", ptr->major, ptr->minor);
+  if (auto* ptr =
+          device_info.gpu_compute_capability().cuda_compute_capability()) {
+    std::string profile_name = absl::StrCat("sm_", ptr->major, ptr->minor);
+    // For sm_100, append device name to distinguish B200 vs GB200.
+    if (profile_name == "sm_100") {
+      CHECK(device_info.name() != se::DeviceDescription::kUndefinedString)
+          << "Device name must be set for sm_100 devices to distinguish "
+             "B200 vs GB200. Use B200SXMDeviceInfo() in tests.";
+      std::vector<std::string> full_name =
+          absl::StrSplit(device_info.name(), ' ');
+      return absl::StrCat(profile_name, "_", full_name.back());
+    }
+    return profile_name;
+  }
+  if (auto* ptr =
+          device_info.gpu_compute_capability().rocm_compute_capability()) {
+    return ptr->gfx_version();
   }
   return "<unknown>";
 }
@@ -74,7 +91,9 @@ namespace gpu {
 const HloOpProfiles::HloOpProfile& HloOpProfiles::GetProfile(
     const se::DeviceDescription& device_info) const {
   auto it = profiles_.find(GetProfileName(device_info));
-  if (it != profiles_.end()) return it->second;
+  if (it != profiles_.end()) {
+    return it->second;
+  }
   return default_profile_;
 }
 

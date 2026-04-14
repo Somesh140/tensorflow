@@ -24,7 +24,19 @@ def ChloLegalizeToHighLevelMhloPass : Pass<"chlo-legalize-to-high-level-mhlo", "
   }];
   let options = [
     Option<"enable_acosh_", "enable-acosh", "bool", /*default=*/"false",
-           "Enable chlo.acosh to mhlo.acosh lowering.">
+           "Enable chlo.acosh to mhlo.acosh lowering.">,
+    Option<"enable_acos_", "enable-acos", "bool", /*default=*/"false",
+           "Enable chlo.acos to mhlo.acos lowering.">,
+    Option<"enable_atanh_", "enable-atanh", "bool", /*default=*/"false",
+           "Enable chlo.atanh to mhlo.atanh lowering.">,
+    Option<"enable_cosh_", "enable-cosh", "bool", /*default=*/"false",
+           "Enable chlo.cosh to mhlo.cosh lowering.">,
+    Option<"enable_sinh_", "enable-sinh", "bool", /*default=*/"false",
+           "Enable chlo.sinh to mhlo.sinh lowering.">,
+    Option<"enable_asin_", "enable-asin", "bool", /*default=*/"false",
+           "Enable chlo.asin to mhlo.asin lowering.">,
+    Option<"enable_asinh_", "enable-asinh", "bool", /*default=*/"false",
+           "Enable chlo.asinh to mhlo.asinh lowering.">
   ];
   let dependentDialects = ["mhlo::MhloDialect"];
 }
@@ -41,11 +53,6 @@ def ChloLegalizeToHloPass : Pass<"chlo-legalize-to-hlo", "func::FuncOp"> {
     "mlir::stablehlo::StablehloDialect",
     "mlir::tensor::TensorDialect"
   ];
-}
-
-def HloLegalizeToArithmeticPass :Pass<"hlo-legalize-to-arithmetic", "ModuleOp"> {
-  let summary = "Legalize from HLO dialect to arithmetic dialect.";
-  let constructor = "createLegalizeToArithmeticPass()";
 }
 
 def LegalizeDotToDotGeneralPass : Pass<"mhlo-legalize-dot-to-dot-general", "func::FuncOp"> {
@@ -67,15 +74,6 @@ def LegalizeTorchIndexSelectToGatherPass : Pass<"mhlo-legalize-torch-index-selec
 def LegalizeTanhToApproximationPass : Pass<"mhlo-legalize-trigonometric-to-approximation", "func::FuncOp"> {
   let summary = "Legalize trigonometric operations from standard dialect to an approximation.";
   let constructor = "createLegalizeTrigonometricToApproximationPass()";
-}
-
-def HloLegalizeToLinalgPass : Pass<"hlo-legalize-to-linalg", "func::FuncOp"> {
-  let summary = "Legalize from HLO dialect to Linalg dialect.";
-  let constructor = "createLegalizeHloToLinalgPass()";
-  let options = [Option<"enablePrimitiveOps", "enable-primitive-ops", "bool",
-                        /*default=*/"false",
-                        "Lower to primitive Linalg ops (map, reduce and "
-                        "transpose) when possible, instead of linalg.generic">];
 }
 
 def TestMaterializeBroadcastsPass : Pass<"mhlo-test-materialize-broadcasts", "func::FuncOp"> {
@@ -155,11 +153,6 @@ def FlattenTuplePass : Pass<"mhlo-flatten-tuple", "func::FuncOp"> {
   let summary = "Flatten tuples in operands and results of operators that "
     "support both tuple and variadic type.";
   let constructor = "createFlattenTuplePass()";
-}
-
-def ConvertToSignlessPass : Pass<"convert-to-signless", "ModuleOp"> {
-  let summary = "Pass to transform the IR to be on signless integers.";
-  let constructor = "createConvertToSignlessPass()";
 }
 
 def CollapseElementwiseMapPass

@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "xla/hlo/transforms/collectives/convert_async_collectives_to_sync.h"
 
+#include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -32,7 +34,10 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_schedule.h"
 #include "xla/hlo/utils/hlo_query.h"
+#include "xla/service/scheduling_annotations_util.h"
 #include "xla/status_macros.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/errors.h"
@@ -40,8 +45,9 @@ limitations under the License.
 
 namespace xla {
 
-absl::StatusOr<HloInstruction*> CreateSyncVariant(HloInstruction* async_start,
-                                                  HloInstruction* async_done) {
+absl::StatusOr<HloInstruction*>
+ConvertAsyncCollectivesToSync::ReplaceWithSyncVariant(
+    HloInstruction* async_start, HloInstruction* async_done) {
   HloInstruction* sync_instruction = nullptr;
   HloComputation* computation = async_start->parent();
 
@@ -89,15 +95,37 @@ absl::StatusOr<HloInstruction*> CreateSyncVariant(HloInstruction* async_start,
 
   sync_instruction->set_metadata(async_start->metadata());
   sync_instruction->CopyBackendConfigFrom(async_start);
+  FrontendAttributes fas = async_done->frontend_attributes();
+  sync_instruction->set_frontend_attributes(fas);
 
   TF_RETURN_IF_ERROR(async_done->ReplaceAllUsesWith(sync_instruction));
 
-  // Collectives may have control dependencies due to passes like collective
-  // schedule linearizer. Since we are running post scheduling, we can safely
-  // ignore these control dependencies. Drop them to prepare for removal of the
-  // async-start/done.
+  // Copy control dependencies.
+  for (HloInstruction* pred : async_start->control_predecessors()) {
+    TF_RETURN_IF_ERROR(pred->AddControlDependencyTo(sync_instruction));
+  }
+  for (HloInstruction* succ : async_done->control_successors()) {
+    TF_RETURN_IF_ERROR(sync_instruction->AddControlDependencyTo(succ));
+  }
+  if (!async_start->control_successors().empty()) {
+    LOG(WARNING) << "Async start " << async_start->name()
+                 << " is being replaced by a synchronous op, but it has "
+                    "control successors. These dependencies are being dropped";
+  }
+  if (!async_done->control_predecessors().empty()) {
+    LOG(WARNING)
+        << "Async done " << async_done->name()
+        << " is being replaced by a synchronous op, but it has "
+           "control predecessors. These dependencies are being dropped";
+  }
   TF_RETURN_IF_ERROR(async_start->DropAllControlDeps());
   TF_RETURN_IF_ERROR(async_done->DropAllControlDeps());
+
+  // Remember name of async instruction for profile usability.
+  FrontendAttributes attributes;
+  auto& map = *attributes.mutable_map();
+  map[kAsyncCollectiveNameAttributeName] = async_start->name();
+  sync_instruction->add_frontend_attributes(std::move(attributes));
 
   // When we remove the async-done (and its unused operands), in most cases,
   // the async-start may not be deleted if its considered as having side effects
@@ -122,12 +150,17 @@ ConvertAsyncCollectivesToSync::ReplaceAsyncInstructionsWithSync(
   absl::flat_hash_map<HloInstruction*, HloInstruction*> replaced_ops;
   for (auto& [async_start, async_done] : async_pairs) {
     TF_ASSIGN_OR_RETURN(HloInstruction * sync,
-                        CreateSyncVariant(async_start, async_done));
-    // Remember name of async instruction for profile usability.
-    FrontendAttributes attributes;
-    auto& map = *attributes.mutable_map();
-    map[kAsyncCollectiveNameAttributeName] = async_start->name();
-    sync->add_frontend_attributes(std::move(attributes));
+                        ReplaceWithSyncVariant(async_start, async_done));
+    TF_ASSIGN_OR_RETURN(std::optional<int64_t> group_id,
+                        GetSchedulingAnnotationGroupId(async_done));
+    if (group_id) {
+      LOG(WARNING) << "Async collective pair (" << async_start->name() << ", "
+                   << async_done->name() << ") with scheduling group id "
+                   << *group_id
+                   << " is not overlapped after scheduling and is converted "
+                      "to a synchronous collective "
+                   << sync->name() << ".";
+    }
 
     replaced_ops[async_start] = nullptr;
     replaced_ops[async_done] = sync;
@@ -202,7 +235,7 @@ absl::StatusOr<bool> ConvertAsyncCollectivesToSync::RunOnComputation(
   return true;
 }
 
-absl::StatusOr<bool> ConvertAsyncCollectivesToSync::Run(
+absl::StatusOr<bool> ConvertAsyncCollectivesToSync::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   if (!module->has_schedule()) {

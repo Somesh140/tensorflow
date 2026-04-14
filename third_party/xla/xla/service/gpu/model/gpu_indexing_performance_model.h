@@ -18,20 +18,20 @@ limitations under the License.
 
 #include <cstdint>
 #include <variant>
-#include <vector>
 
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "mlir/IR/MLIRContext.h"
+#include "xla/codegen/tiling/tiled_hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/utils/hlo_traversal.h"
 #include "xla/service/gpu/hlo_fusion_analysis.h"
 #include "xla/service/gpu/launch_dimensions.h"
+#include "xla/service/gpu/model/block_level_parameters.h"
 #include "xla/service/gpu/model/fusion_analysis_cache.h"
 #include "xla/service/gpu/model/gpu_hlo_cost_analysis.h"
 #include "xla/service/gpu/model/gpu_performance_model_base.h"
 #include "xla/service/gpu/model/hlo_op_profiles.h"
-#include "xla/service/gpu/model/tiled_hlo_computation.h"
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/instruction_fusion.h"
 #include "xla/shape.h"
@@ -101,7 +101,7 @@ class GpuPerformanceModelWithIndexingAnalysis : public GpuPerformanceModelBase {
   absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledFusion(
       const HloFusionAdaptor& fusion_adaptor,
       const LaunchDimensions& launch_dimensions,
-      const std::vector<std::vector<int64_t>>& output_tile_sizes);
+      const BlockLevelParameters& block_level_parameters);
 
   // Estimate the run time of producer and consumer fused together, assuming
   // that they will be emitted with Triton.

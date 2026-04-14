@@ -38,11 +38,11 @@
 #include "grpcpp/security/credentials.h"
 #include "grpcpp/support/channel_arguments.h"
 #include "xla/pjrt/distributed/util.h"
-#include "xla/python/ifrt/future.h"
 #include "xla/python/ifrt_proxy/common/grpc_credentials_possibly_insecure_wrapper.h"
 #include "xla/python/ifrt_proxy/common/grpc_ifrt_service.grpc.pb.h"
 #include "xla/python/ifrt_proxy/common/grpc_ifrt_service.pb.h"
 #include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
+#include "xla/tsl/concurrency/future.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/logging.h"
@@ -122,25 +122,24 @@ GrpcClientSession::GrpcClientSession(
       absl::bind_front(&GrpcClientSession::ReadLoop, this));
 }
 
-Future<std::shared_ptr<IfrtResponse>> GrpcClientSession::Enqueue(
+tsl::Future<std::shared_ptr<IfrtResponse>> GrpcClientSession::Enqueue(
     std::unique_ptr<IfrtRequest> request) {
-  auto [promise, future] = Future<std::shared_ptr<IfrtResponse>>::MakePromise();
-  auto shared_promise = std::move(promise).ToShared();
+  auto [promise_tmp, future] =
+      tsl::MakePromise<std::shared_ptr<IfrtResponse>>();
+  auto promise = std::move(promise_tmp).ToShared();
   absl::Status status = Enqueue(
       std::move(request),
-      [promise = std::move(shared_promise),
-       queue = user_futures_work_queue_.get()](
+      [promise, queue = user_futures_work_queue_.get()](
           absl::StatusOr<std::shared_ptr<IfrtResponse>> response) mutable {
-        queue->Schedule([promise = std::move(promise),
-                         response = std::move(response)]() mutable -> void {
-          promise->Set(std::move(response));
-        });
+        queue->Schedule(
+            [promise, response = std::move(response)]() mutable -> void {
+              promise->Set(std::move(response));
+            });
       });
   if (!status.ok()) {
-    user_futures_work_queue_->Schedule(
-        [promise = std::move(shared_promise), status]() mutable -> void {
-          promise->Set(std::move(status));
-        });
+    user_futures_work_queue_->Schedule([promise, status]() mutable -> void {
+      promise->Set(std::move(status));
+    });
   }
   return std::move(future);
 }

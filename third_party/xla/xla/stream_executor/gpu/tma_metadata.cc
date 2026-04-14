@@ -20,7 +20,6 @@ limitations under the License.
 #include <initializer_list>
 #include <string>
 #include <utility>
-#include <variant>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/inlined_vector.h"
@@ -460,10 +459,11 @@ absl::StatusOr<TmaMetadata> TmaMetadata::FromProto(
   return metadata;
 }
 
+// TODO(b/463912789): Re-enable TMA for Blackwell once the bug is fixed.
 bool IsTmaAvailableForDevice(
     const stream_executor::DeviceDescription& device_info) {
-  if (auto* cuda_cc = std::get_if<stream_executor::CudaComputeCapability>(
-          &device_info.gpu_compute_capability())) {
+  if (auto* cuda_cc =
+          device_info.gpu_compute_capability().cuda_compute_capability()) {
     return cuda_cc->IsAtLeastHopper();
   }
   return false;

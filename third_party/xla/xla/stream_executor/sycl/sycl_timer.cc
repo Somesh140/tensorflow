@@ -17,24 +17,20 @@ limitations under the License.
 
 #include <level_zero/ze_api.h>
 
-#include "xla/stream_executor/activate_context.h"
-
 constexpr int kMsecInSec = 1000;
 
-namespace stream_executor::gpu {
+namespace stream_executor::sycl {
 
 namespace {
 
 absl::StatusOr<float> GetEventElapsedTime(StreamExecutor* executor,
-                                          const sycl::event& start,
-                                          const sycl::event& stop) {
-  std::unique_ptr<ActivateContext> activation = executor->Activate();
-
+                                          const ::sycl::event& start,
+                                          const ::sycl::event& stop) {
   // Get the native Level Zero event handles.
   ze_event_handle_t start_event =
-      ::sycl::get_native<sycl::backend::ext_oneapi_level_zero>(start);
+      ::sycl::get_native<::sycl::backend::ext_oneapi_level_zero>(start);
   ze_event_handle_t end_event =
-      ::sycl::get_native<sycl::backend::ext_oneapi_level_zero>(stop);
+      ::sycl::get_native<::sycl::backend::ext_oneapi_level_zero>(stop);
 
   // Synchronize the events to ensure they are complete.
   ze_result_t sync_result = zeEventHostSynchronize(end_event, UINT64_MAX);
@@ -55,10 +51,10 @@ absl::StatusOr<float> GetEventElapsedTime(StreamExecutor* executor,
 
   // Get the frequency and mask for the device to convert timestamps to
   // milliseconds.
-  // TODO(intel-tf): Remove the hardcoded frequency and mask values once
-  // SyclGetFrequencyMask is implemented for all devices in SYCL GPU runtime.
-  constexpr uint64_t frequency = 12500000;  // 12.5 MHz
-  constexpr uint64_t mask = 4294967295;     // 0xFFFFFFFF
+  // We assume that all SYCL devices have the same frequency and mask, so
+  // we use kDefaultDeviceOrdinal.
+  TF_ASSIGN_OR_RETURN(SyclTimerProperties timer_props,
+                      SyclGetTimerProperties(kDefaultDeviceOrdinal));
 
   const uint64_t kernel_start_time = start_timestamp.global.kernelStart;
   const uint64_t kernel_end_time = end_timestamp.global.kernelEnd;
@@ -66,12 +62,14 @@ absl::StatusOr<float> GetEventElapsedTime(StreamExecutor* executor,
   if (kernel_start_time < kernel_end_time) {
     elapsed_ticks = kernel_end_time - kernel_start_time;
   } else {
-    elapsed_ticks = (mask + 1ull) + kernel_end_time - kernel_start_time;
+    elapsed_ticks = (timer_props.timestamp_mask + 1ull) + kernel_end_time -
+                    kernel_start_time;
   }
   float elapsed_milliseconds =
-      static_cast<float>(elapsed_ticks) * kMsecInSec / frequency;
+      static_cast<float>(elapsed_ticks) * kMsecInSec / timer_props.frequency_hz;
 
-  VLOG(1) << "Frequency: " << frequency << ", mask: " << mask;
+  VLOG(1) << "Frequency: " << timer_props.frequency_hz
+          << ", mask: " << timer_props.timestamp_mask;
   VLOG(1) << "The duration between start and stop events is "
           << elapsed_milliseconds << " ms.";
   return elapsed_milliseconds;
@@ -107,4 +105,4 @@ absl::StatusOr<SyclTimer> SyclTimer::Create(StreamExecutor* executor,
                    stream);
 }
 
-}  // namespace stream_executor::gpu
+}  // namespace stream_executor::sycl

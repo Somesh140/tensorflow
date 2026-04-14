@@ -43,13 +43,14 @@ limitations under the License.
 #include "xla/service/shaped_buffer.h"
 #include "xla/service/transfer_manager.h"
 #include "xla/shape_util.h"
-#include "xla/stream_executor/device_memory_allocator.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/stream_executor/stream_executor_memory_allocator.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
@@ -88,7 +89,7 @@ class MockExecutable : public Executable {
 };
 
 absl::StatusOr<ScopedShapedBuffer> CreateTestBuffer(
-    se::DeviceMemoryAllocator* allocator, se::StreamExecutor* stream_exec,
+    se::DeviceAddressAllocator* allocator, se::StreamExecutor* stream_exec,
     se::Stream* stream, int32_t value) {
   Shape test_shape = ShapeUtil::MakeShape(S32, {});
   TF_ASSIGN_OR_RETURN(auto* transfer_manager, TransferManager::GetForPlatform(
@@ -103,6 +104,25 @@ absl::StatusOr<ScopedShapedBuffer> CreateTestBuffer(
   return output;
 }
 
+absl::StatusOr<ScopedShapedBuffer> CreateTupleTestBuffer(
+    se::DeviceAddressAllocator* allocator, se::StreamExecutor* stream_exec,
+    se::Stream* stream, int32_t value1, int32_t value2) {
+  Shape test_shape = ShapeUtil::MakeShape(S32, {});
+  Shape test_shape_tuple = ShapeUtil::MakeTupleShape({test_shape, test_shape});
+  TF_ASSIGN_OR_RETURN(auto* transfer_manager, TransferManager::GetForPlatform(
+                                                  stream_exec->GetPlatform()));
+  TF_ASSIGN_OR_RETURN(
+      ScopedShapedBuffer output,
+      transfer_manager->AllocateScopedShapedBuffer(
+          test_shape_tuple, allocator, stream_exec->device_ordinal()));
+  Literal literal1 = LiteralUtil::CreateR0<int32_t>(value1);
+  Literal literal2 = LiteralUtil::CreateR0<int32_t>(value2);
+  Literal tuple_literal = LiteralUtil::MakeTuple({&literal1, &literal2});
+  TF_RETURN_IF_ERROR(
+      transfer_manager->TransferLiteralToDevice(stream, tuple_literal, output));
+  return output;
+}
+
 class GpuProfilerTest : public HloHardwareIndependentTestBase {
  public:
   GpuProfilerTest() {
@@ -111,10 +131,11 @@ class GpuProfilerTest : public HloHardwareIndependentTestBase {
         PlatformUtil::GetStreamExecutors(platform).value();
     stream_exec_ = executors[0];
     allocator_ =
-        std::make_unique<se::StreamExecutorMemoryAllocator>(stream_exec_);
+        std::make_unique<stream_executor::StreamExecutorAddressAllocator>(
+            stream_exec_);
   }
   se::StreamExecutor* stream_exec_;
-  std::unique_ptr<se::DeviceMemoryAllocator> allocator_;
+  std::unique_ptr<se::DeviceAddressAllocator> allocator_;
 };
 
 TEST_F(GpuProfilerTest, CreateInputBuffersAndProfile) {
@@ -137,26 +158,6 @@ TEST_F(GpuProfilerTest, CreateInputBuffersAndProfile) {
   EXPECT_EQ(profile.output_buffer->on_device_shape(),
             ShapeUtil::MakeShape(S32, {}));
   EXPECT_EQ(profile.scratch_bytes, 0);
-}
-
-TEST_F(GpuProfilerTest, ProfileWithTupleOutput) {
-  constexpr absl::string_view kHloModule = R"(
-    HloModule module
-    ENTRY main {
-      ROOT c = (s32[], s32[]) tuple(s32[] constant(1), s32[] constant(2))
-    }
-  )";
-  TF_ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(kHloModule));
-  MockExecutable mock_executable(module, 1000);
-  auto profiler =
-      GpuProfiler::Create(stream_exec_, ProfileOptions(), allocator_.get());
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
-                          profiler->CreateInputBuffers(&mock_executable));
-  TF_ASSERT_OK_AND_ASSIGN(ProfileResult profile,
-                          profiler->Profile(&mock_executable, *buffers));
-  EXPECT_EQ(profile.output_buffer->on_device_shape(),
-            ShapeUtil::MakeShape(S32, {}));
 }
 
 TEST_F(GpuProfilerTest, FailingExecutablesReturnStatus) {
@@ -211,7 +212,7 @@ TEST_F(GpuProfilerTest, CheckOutputBufferWhenBuffersAreSame) {
 
   TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_exec_->CreateStream());
   auto allocator =
-      std::make_unique<stream_executor::StreamExecutorMemoryAllocator>(
+      std::make_unique<stream_executor::StreamExecutorAddressAllocator>(
           stream_exec_);
   TF_ASSERT_OK_AND_ASSIGN(ScopedShapedBuffer output,
                           CreateTestBuffer(allocator.get(), stream_exec_,
@@ -228,7 +229,7 @@ TEST_F(GpuProfilerTest, CheckOutputBufferWhenBuffersAreDifferent) {
   auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
   TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_exec_->CreateStream());
   auto allocator =
-      std::make_unique<stream_executor::StreamExecutorMemoryAllocator>(
+      std::make_unique<stream_executor::StreamExecutorAddressAllocator>(
           stream_exec_);
   TF_ASSERT_OK_AND_ASSIGN(ScopedShapedBuffer output,
                           CreateTestBuffer(allocator.get(), stream_exec_,
@@ -237,6 +238,54 @@ TEST_F(GpuProfilerTest, CheckOutputBufferWhenBuffersAreDifferent) {
                           CreateTestBuffer(allocator.get(), stream_exec_,
                                            stream.get(), /*value=*/2));
   EXPECT_THAT(profiler->CheckOutputBuffer(output, reference, /*rtol=*/0.0),
+              StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST_F(GpuProfilerTest, CheckOutputBufferWithTupleShapeAreSame) {
+  ProfileOptions options;
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+
+  TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_exec_->CreateStream());
+  auto allocator =
+      std::make_unique<stream_executor::StreamExecutorAddressAllocator>(
+          stream_exec_);
+  TF_ASSERT_OK_AND_ASSIGN(
+      ScopedShapedBuffer output,
+      CreateTupleTestBuffer(allocator.get(), stream_exec_, stream.get(),
+                            /*value1=*/1, /*value2=*/2));
+  TF_ASSERT_OK_AND_ASSIGN(
+      ScopedShapedBuffer reference,
+      CreateTupleTestBuffer(allocator.get(), stream_exec_, stream.get(),
+                            /*value1=*/1, /*value2=*/2));
+  EXPECT_THAT(profiler->CheckOutputBuffer(output, reference, /*rtol=*/0.0),
+              StatusIs(absl::StatusCode::kOk));
+}
+
+TEST_F(GpuProfilerTest, CheckOutputBufferWithTupleShapeAreDifferent) {
+  ProfileOptions options;
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+
+  TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_exec_->CreateStream());
+  auto allocator =
+      std::make_unique<stream_executor::StreamExecutorAddressAllocator>(
+          stream_exec_);
+  TF_ASSERT_OK_AND_ASSIGN(
+      ScopedShapedBuffer reference,
+      CreateTupleTestBuffer(allocator.get(), stream_exec_, stream.get(),
+                            /*value1=*/1, /*value2=*/2));
+  TF_ASSERT_OK_AND_ASSIGN(
+      ScopedShapedBuffer output_error_in_first_element,
+      CreateTupleTestBuffer(allocator.get(), stream_exec_, stream.get(),
+                            /*value1=*/0, /*value2=*/2));
+  TF_ASSERT_OK_AND_ASSIGN(
+      ScopedShapedBuffer output_error_in_second_element,
+      CreateTupleTestBuffer(allocator.get(), stream_exec_, stream.get(),
+                            /*value1=*/1, /*value2=*/3));
+  EXPECT_THAT(profiler->CheckOutputBuffer(output_error_in_first_element,
+                                          reference, /*rtol=*/0.0),
+              StatusIs(absl::StatusCode::kInternal));
+  EXPECT_THAT(profiler->CheckOutputBuffer(output_error_in_second_element,
+                                          reference, /*rtol=*/0.0),
               StatusIs(absl::StatusCode::kInternal));
 }
 
@@ -255,7 +304,7 @@ ENTRY %entry_computation (transpose.562: bf16[32,120,6,512], Arg_1.2: f32[3072,5
   %bitcast.0 = bf16[1,32,120,6,512]{4,3,2,1,0} bitcast(%transpose.562)
   %bitcast.1 = bf16[3840,3072]{1,0} bitcast(%bitcast.0)
   %wrapped_convert = bf16[3072,512]{1,0} fusion(%Arg_1.2), kind=kLoop, calls=%wrapped_convert_computation
-  %custom-call.1 = (bf16[512,3840]{0,1}, s8[26738688]{0}) custom-call(%wrapped_convert, %bitcast.1), custom_call_target="__cublas$gemm", backend_config={"operation_queue_id":"0","wait_on_operation_queues":[],"gemm_backend_config":{"alpha_real":1,"beta":0,"dot_dimension_numbers":{"lhs_contracting_dimensions":["0"],"rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],"rhs_batch_dimensions":[]},"alpha_imag":0,"precision_config":{"operand_precision":["DEFAULT","DEFAULT"],"algorithm":"ALG_UNSET"},"epilogue":"DEFAULT","lhs_stride":"1572864","rhs_stride":"11796480","grad_x":false,"grad_y":false,"damax_output":false},"force_earliest_schedule":false,"reification_cost":[]}
+  %custom-call.1 = (bf16[512,3840]{0,1}, s8[26738688]{0}) custom-call(%wrapped_convert, %bitcast.1), custom_call_target="__cublas$gemm", backend_config={"operation_queue_id":"0","gemm_backend_config":{"alpha_real":1,"beta":0,"dot_dimension_numbers":{"lhs_contracting_dimensions":["0"],"rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],"rhs_batch_dimensions":[]},"alpha_imag":0,"precision_config":{"operand_precision":["DEFAULT","DEFAULT"],"algorithm":"ALG_UNSET"},"epilogue":"DEFAULT","lhs_stride":"1572864","rhs_stride":"11796480","grad_x":false,"grad_y":false,"damax_output":false},"force_earliest_schedule":false,"reification_cost":[]}
   %get-tuple-element = bf16[512,3840]{0,1} get-tuple-element(%custom-call.1), index=0
   ROOT %bitcast.2 = bf16[3840,512]{1,0} bitcast(%get-tuple-element)
 })";

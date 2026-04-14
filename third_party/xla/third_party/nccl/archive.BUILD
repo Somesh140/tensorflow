@@ -15,6 +15,7 @@ load(
     "@local_config_nccl//:generated_names.bzl",
     "GENERATED_SOURCES",
 )
+load("@rules_python//python:defs.bzl", "py_binary")
 
 licenses(["notice"])
 
@@ -175,7 +176,7 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "@local_config_cuda//cuda:cuda_headers",
-        "@local_xla//xla/tsl/cuda:nccl",
+        "@xla//xla/tsl/cuda:nccl",
     ],
 )
 

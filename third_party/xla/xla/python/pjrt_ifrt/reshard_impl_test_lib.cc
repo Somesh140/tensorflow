@@ -29,6 +29,7 @@ limitations under the License.
 #include "absl/container/inlined_vector.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
@@ -44,7 +45,6 @@ limitations under the License.
 #include "xla/python/ifrt/device.h"
 #include "xla/python/ifrt/device_list.h"
 #include "xla/python/ifrt/dtype.h"
-#include "xla/python/ifrt/future.h"
 #include "xla/python/ifrt/index.h"
 #include "xla/python/ifrt/index_domain.h"
 #include "xla/python/ifrt/memory.h"
@@ -54,8 +54,8 @@ limitations under the License.
 #include "xla/python/pjrt_ifrt/pjrt_dtype.h"
 #include "xla/python/pjrt_ifrt/xla_sharding.h"
 #include "xla/shape_util.h"
+#include "xla/tsl/concurrency/future.h"
 #include "xla/tsl/platform/errors.h"
-#include "xla/tsl/platform/status_matchers.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla_data.pb.h"
 
@@ -65,8 +65,6 @@ namespace {
 
 using ::testing::Eq;
 using ::testing::HasSubstr;
-using ::tsl::testing::IsOkAndHolds;
-using ::tsl::testing::StatusIs;
 
 absl::StatusOr<ArrayRef> MakeArrayFromLiteral(Client* absl_nonnull client,
                                               const xla::LiteralBase& literal,
@@ -75,8 +73,10 @@ absl::StatusOr<ArrayRef> MakeArrayFromLiteral(Client* absl_nonnull client,
                       ToDType(literal.shape().element_type()));
   const Shape shape(literal.shape().dimensions());
 
-  TF_ASSIGN_OR_RETURN(const std::vector<IndexDomain> index_domains,
-                      sharding->IndexDomains(shape));
+  TF_ASSIGN_OR_RETURN(
+      const std::vector<IndexDomain> index_domains,
+      sharding->IndexDomains(shape,
+                             SingleDeviceShardSemantics::kAddressableShards));
 
   Client::MakeArraysFromHostBufferShardsSpec spec = {
       /*buffers=*/{},
@@ -121,8 +121,10 @@ absl::StatusOr<xla::Literal> CopyArrayToLiteral(ArrayRef array) {
   const auto xla_shape =
       xla::ShapeUtil::MakeShape(element_type, array->shape().dims());
 
-  TF_ASSIGN_OR_RETURN(const std::vector<IndexDomain> index_domains,
-                      array->sharding().IndexDomains(array->shape()));
+  TF_ASSIGN_OR_RETURN(
+      const std::vector<IndexDomain> index_domains,
+      array->sharding().IndexDomains(
+          array->shape(), SingleDeviceShardSemantics::kAddressableShards));
   TF_ASSIGN_OR_RETURN(std::vector<ArrayRef> shards,
                       array->DisassembleIntoSingleDeviceArrays(
                           ArrayCopySemantics::kReuseInput,
@@ -138,7 +140,7 @@ absl::StatusOr<xla::Literal> CopyArrayToLiteral(ArrayRef array) {
     TF_ASSIGN_OR_RETURN(xla::Literal slice,
                         xla::Literal::Make(xla::ShapeUtil::MakeShape(
                             element_type, shard_shape.dims())));
-    Future<> future = shards[i]->CopyToHostBuffer(
+    tsl::Future<> future = shards[i]->CopyToHostBuffer(
         slice.untyped_data(), std::nullopt, ArrayCopySemantics::kAlwaysCopy);
     TF_RETURN_IF_ERROR(future.Await());
     VLOG(2) << "Slice #" << i << " (" << index_domains[i]
@@ -400,7 +402,18 @@ TEST_F(ReshardTest, DifferentDestinationLayout) {
 
   // Make sure that the destination layout is actually different from the source
   // layout in order to ensure the test coverage.
-  TF_ASSERT_OK_AND_ASSIGN(const auto src_layout, src_array->layout());
+  TF_ASSERT_OK_AND_ASSIGN(std::shared_ptr<const xla::PjRtLayout> src_layout,
+                          src_array->pjrt_layout());
+  if (src_layout == nullptr) {
+    TF_ASSERT_OK_AND_ASSIGN(
+        Shape shard_shape,
+        src_array->sharding().GetShardShape(src_array->shape()));
+    TF_ASSERT_OK_AND_ASSIGN(
+        src_layout, client_->GetDefaultPjRtLayout(
+                        src_array->dtype(), shard_shape.dims(),
+                        src_array->sharding().devices()->devices().front(),
+                        src_array->sharding().memory_kind()));
+  }
   ASSERT_NE(src_layout->xla_layout(), dst_array_spec.layout->xla_layout());
 
   TF_ASSERT_OK_AND_ASSIGN(
@@ -413,7 +426,8 @@ TEST_F(ReshardTest, DifferentDestinationLayout) {
   EXPECT_EQ(dst_array->sharding(), *dst_array_spec.sharding);
 
   // Verify that the destination array is created with the user-provided layout.
-  TF_ASSERT_OK_AND_ASSIGN(const auto dst_layout, dst_array->layout());
+  TF_ASSERT_OK_AND_ASSIGN(const auto dst_layout, dst_array->pjrt_layout());
+  ASSERT_NE(dst_layout, nullptr);
   EXPECT_EQ(dst_layout->xla_layout(), dst_array_spec.layout->xla_layout());
 
   EXPECT_THAT(CopyArrayToLiteral(dst_array),

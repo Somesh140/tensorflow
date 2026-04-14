@@ -15,7 +15,9 @@ limitations under the License.
 
 #include "xla/python/ifrt/device_list.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -80,21 +82,20 @@ absl::StatusOr<DeviceListRef> DeviceList::FromProto(
   return client->MakeDeviceList(devices);
 }
 
-DeviceListProto DeviceList::ToProto(SerDesVersion version) const {
-  // TODO(b/423702568): Change the return type to `absl::StatusOr<...>` for
-  // graceful error handling.
+void DeviceList::ToProto(DeviceListProto& proto, SerDesVersion version) const {
+  // TODO(b/423702568): Change the return type to `absl::Status` for graceful
+  // error handling.
   CHECK_GE(version.version_number(), SerDesVersionNumber(0))
       << "Unsupported " << version.version_number()
       << " for DeviceList serialization";
 
-  DeviceListProto proto;
+  proto.Clear();
   proto.set_version_number(SerDesVersionNumber(0).value());
 
   proto.mutable_device_ids()->Reserve(devices().size());
   for (Device* device : devices()) {
     proto.mutable_device_ids()->AddAlreadyReserved(device->Id().value());
   }
-  return proto;
 }
 
 uint64_t DeviceList::fingerprint() const {
@@ -112,6 +113,39 @@ std::vector<DeviceId> GetDeviceIds(const DeviceListRef& device_list) {
     ids.push_back(device->Id());
   }
   return ids;
+}
+
+std::string DeviceListDifferencesString(const DeviceList& a,
+                                        const DeviceList& b,
+                                        int max_differences) {
+  std::string result;
+  if (a.size() != b.size()) {
+    absl::StrAppend(&result, "sizes: ", a.size(), " vs. ", b.size());
+  }
+  int min_size = std::min(a.size(), b.size());
+  int total_differences = 0;
+  int reported_differences = 0;
+  absl::Span<const Device* const> a_devices = a.devices();
+  absl::Span<const Device* const> b_devices = b.devices();
+  for (int i = 0; i < min_size; ++i) {
+    if (a_devices[i]->Id() != b_devices[i]->Id()) {
+      ++total_differences;
+      if (reported_differences < max_differences) {
+        if (!result.empty()) {
+          absl::StrAppend(&result, "; ");
+        }
+        absl::StrAppend(&result, "device #", i, ": ",
+                        a_devices[i]->Id().value(), " vs. ",
+                        b_devices[i]->Id().value());
+        ++reported_differences;
+      }
+    }
+  }
+  int unreported = total_differences - reported_differences;
+  if (unreported > 0) {
+    absl::StrAppend(&result, " (and ", unreported, " more)");
+  }
+  return result;
 }
 
 }  // namespace ifrt

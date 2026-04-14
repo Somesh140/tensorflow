@@ -15,7 +15,6 @@ limitations under the License.
 
 #include "xla/hlo/builder/xla_builder.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -50,12 +49,12 @@ limitations under the License.
 #include "xla/hlo/builder/xla_computation.h"
 #include "xla/hlo/ir/hlo_input_output_alias_config.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/ir/hlo_original_value.h"
 #include "xla/hlo/ir/hlo_sharding.h"
 #include "xla/layout.h"
 #include "xla/layout_util.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
-#include "xla/permutation_util.h"
 #include "xla/primitive_util.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/service/shape_inference.h"
@@ -64,11 +63,11 @@ limitations under the License.
 #include "xla/sharding_op_util.h"
 #include "xla/status_macros.h"
 #include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/window_util.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/stacktrace.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -545,7 +544,9 @@ absl::StatusOr<ProgramShape> XlaBuilder::GetSubcomputationShape(
   TF_RETURN_IF_ERROR(first_error_);
   TF_ASSIGN_OR_RETURN(const HloComputationProto* computation_proto,
                       GetSubcomputation(id));
-  return ProgramShape(computation_proto->program_shape());
+  return ProgramShape(
+      ProgramShape::FromProto(computation_proto->program_shape())
+          .value_or(ProgramShape()));
 }
 
 absl::Status XlaBuilder::AddCalledComputation(XlaComputationId computation,
@@ -867,8 +868,10 @@ absl::StatusOr<XlaComputation> XlaBuilder::Build(
   }
   if (!input_output_aliases_.empty() || !buffer_donors_.empty()) {
     TF_RETURN_IF_ERROR(PopulateInputOutputAliasAndBufferDonor(
-        module, ProgramShape(entry.program_shape()), input_output_aliases_,
-        buffer_donors_));
+        module,
+        ProgramShape(ProgramShape::FromProto(entry.program_shape())
+                         .value_or(ProgramShape())),
+        input_output_aliases_, buffer_donors_));
   }
   module->add_computations()->Swap(&entry);
   embedded_.clear();
@@ -887,7 +890,9 @@ absl::StatusOr<XlaComputation> XlaBuilder::Build(XlaComputationId entry_id) {
   if (!computation.input_output_aliases.empty() ||
       !computation.buffer_donors.empty()) {
     TF_RETURN_IF_ERROR(PopulateInputOutputAliasAndBufferDonor(
-        &module, ProgramShape(entry.program_shape()),
+        &module,
+        ProgramShape(ProgramShape::FromProto(entry.program_shape())
+                         .value_or(ProgramShape())),
         computation.input_output_aliases, computation.buffer_donors));
   }
   for (auto& e : embedded_) {
@@ -2046,6 +2051,33 @@ absl::StatusOr<XlaOp> XlaBuilder::TupleInternal(
     const Shape& shape, absl::Span<const XlaOp> elements) {
   HloInstructionProto instr;
   *instr.mutable_shape() = shape.ToProto();
+  // Create a new original value for the tuple instruction. The original value
+  // for each element is copied to the corresponding position in the tuple
+  // original value.
+  std::shared_ptr<OriginalValue> original_value =
+      std::make_shared<OriginalValue>(shape);
+  bool has_original_value = false;
+  for (int64_t i = 0; i < elements.size(); ++i) {
+    HloInstructionProto* element_instr =
+        xla::internal::XlaBuilderFriend::GetInstruction(elements[i]);
+    if (element_instr->has_original_value()) {
+      has_original_value = true;
+      auto element_original_value =
+          xla::OriginalValue::FromProto(element_instr->original_value());
+      original_value->mutable_tree()
+          ->CopySubtreeFrom(/*other*/
+                            xla::OriginalValue::FromProto(
+                                element_instr->original_value())
+                                ->tree(),
+                            /*src_index=*/{}, /*dst_index=*/{i});
+    }
+  }
+  std::optional<OriginalValueProto> original_value_proto;
+  if (has_original_value) {
+    original_value_proto = original_value->ToProto();
+  }
+  xla::XlaScopedOriginalValueAssignment original_value_assignment(
+      this, original_value_proto);
   return AddInstruction(std::move(instr), HloOpcode::kTuple, elements);
 }
 
@@ -2074,6 +2106,21 @@ absl::StatusOr<XlaOp> XlaBuilder::GetTupleElementInternal(const Shape& shape,
   HloInstructionProto instr;
   *instr.mutable_shape() = shape.ToProto();
   instr.set_tuple_index(index);
+
+  std::optional<OriginalValueProto> original_value_proto = original_value();
+  if (original_value_proto.has_value()) {
+    auto original_value = xla::OriginalValue::FromProto(*original_value_proto);
+    auto subtree = original_value->tree().Subtree({index});
+    if (subtree.ok()) {
+      auto element_original_value =
+          std::make_shared<xla::OriginalValue>(subtree.value());
+      original_value_proto = element_original_value->ToProto();
+    }
+  }
+
+  XlaScopedOriginalValueAssignment original_value_assignment(
+      this, original_value_proto);
+
   return AddInstruction(std::move(instr), HloOpcode::kGetTupleElement,
                         {tuple_data});
 }
@@ -2110,7 +2157,7 @@ XlaOp XlaBuilder::DotGeneral(
 }
 
 XlaOp XlaBuilder::ScaledDot(
-    XlaOp lhs, XlaOp lhs_scale, XlaOp rhs, XlaOp rhs_scale,
+    XlaOp lhs, XlaOp rhs, XlaOp lhs_scale, XlaOp rhs_scale,
     const DotDimensionNumbers& dimension_numbers,
     const PrecisionConfig* precision_config,
     std::optional<PrimitiveType> preferred_element_type) {
@@ -2129,7 +2176,7 @@ XlaOp XlaBuilder::ScaledDot(
       *instr.mutable_precision_config() = *precision_config;
     }
     return AddInstruction(std::move(instr), HloOpcode::kScaledDot,
-                          {lhs, lhs_scale, rhs, rhs_scale});
+                          {lhs, rhs, lhs_scale, rhs_scale});
   });
 }
 
@@ -2146,12 +2193,12 @@ absl::StatusOr<XlaOp> XlaBuilder::DotGeneralInternal(
   return AddInstruction(std::move(instr), HloOpcode::kDot, {lhs, rhs});
 }
 
-XlaOp ScaledDot(const XlaOp lhs, const XlaOp lhs_scale, const XlaOp rhs,
+XlaOp ScaledDot(const XlaOp lhs, const XlaOp rhs, const XlaOp lhs_scale,
                 const XlaOp rhs_scale,
                 const DotDimensionNumbers& dimension_numbers,
                 const PrecisionConfig* precision_config,
                 std::optional<PrimitiveType> preferred_element_type) {
-  return lhs.builder()->ScaledDot(lhs, lhs_scale, rhs, rhs_scale,
+  return lhs.builder()->ScaledDot(lhs, rhs, lhs_scale, rhs_scale,
                                   dimension_numbers, precision_config,
                                   preferred_element_type);
 }
@@ -2368,11 +2415,12 @@ XlaOp XlaBuilder::ConvGeneralDilated(
                         ShapeInference::InferWindowFromDimensions(
                             window_dimensions, window_strides, padding,
                             lhs_dilation, rhs_dilation, window_reversal));
-    TF_ASSIGN_OR_RETURN(
-        Shape shape,
-        ShapeInference::InferConvolveShape(
-            *lhs_shape, *rhs_shape, feature_group_count, batch_group_count,
-            window, dimension_numbers, preferred_element_type));
+    SparsityConfig sparsity_config;
+    TF_ASSIGN_OR_RETURN(Shape shape,
+                        ShapeInference::InferConvolveShape(
+                            *lhs_shape, *rhs_shape, feature_group_count,
+                            batch_group_count, window, dimension_numbers,
+                            sparsity_config, preferred_element_type));
     return ConvGeneralDilatedInternal(shape, lhs, rhs, window, window_strides,
                                       padding, lhs_dilation, rhs_dilation,
                                       dimension_numbers, feature_group_count,
@@ -2402,11 +2450,12 @@ absl::StatusOr<HloInstructionProto> XlaBuilder::DynamicConvInstruction(
   TF_ASSIGN_OR_RETURN(Window window, ShapeInference::InferWindowFromDimensions(
                                          window_dimensions, window_strides,
                                          padding, lhs_dilation, rhs_dilation));
+  SparsityConfig sparsity_config;
   TF_ASSIGN_OR_RETURN(
       Shape shape,
       ShapeInference::InferConvolveShape(
           *lhs_shape, *rhs_shape, feature_group_count, batch_group_count,
-          window, dimension_numbers, preferred_element_type));
+          window, dimension_numbers, sparsity_config, preferred_element_type));
 
   HloInstructionProto instr;
   *instr.mutable_shape() = shape.ToProto();
@@ -2592,7 +2641,7 @@ XlaOp XlaBuilder::Infeed(const Shape& shape, const std::string& config) {
     };
     if (sharding()) {
       // Arbitrarily assign token to device 0.
-      OpSharding sharding = sharding_builder::AssignDevice(0);
+      OpSharding sharding = sharding_builder::SingleDevice(0);
       XlaScopedShardingAssignment scoped_sharding(this, sharding);
       TF_ASSIGN_OR_RETURN(token, make_token());
     } else {
@@ -2610,7 +2659,7 @@ XlaOp XlaBuilder::Infeed(const Shape& shape, const std::string& config) {
       OpSharding infeed_instruction_sharding = *sharding();
       // Arbitrarily assign the token to device 0.
       *infeed_instruction_sharding.add_tuple_shardings() =
-          sharding_builder::AssignDevice(0);
+          sharding_builder::SingleDevice(0);
       XlaScopedShardingAssignment scoped_sharding(this,
                                                   infeed_instruction_sharding);
       TF_ASSIGN_OR_RETURN(infeed, AddInstruction(std::move(instr),
@@ -2629,7 +2678,7 @@ XlaOp XlaBuilder::Infeed(const Shape& shape, const std::string& config) {
     };
     if (sharding()) {
       // Arbitrarily assign token to device 0.
-      OpSharding sharding = sharding_builder::AssignDevice(0);
+      OpSharding sharding = sharding_builder::SingleDevice(0);
       XlaScopedShardingAssignment scoped_sharding(this, sharding);
       TF_ASSIGN_OR_RETURN(infeed_token_, get_token());
     } else {
@@ -2726,7 +2775,7 @@ void XlaBuilder::Outfeed(XlaOp operand, const Shape& shape_with_layout,
     };
     if (sharding()) {
       XlaScopedShardingAssignment scoped_sharding(
-          this, sharding_builder::AssignDevice(0));
+          this, sharding_builder::SingleDevice(0));
       TF_ASSIGN_OR_RETURN(token, make_token());
     } else {
       TF_ASSIGN_OR_RETURN(token, make_token());
@@ -2737,7 +2786,7 @@ void XlaBuilder::Outfeed(XlaOp operand, const Shape& shape_with_layout,
         tuple_sharding = sharding_builder::Tuple({});
         *tuple_sharding.add_tuple_shardings() = *sharding();
       }
-      *tuple_sharding.add_tuple_shardings() = sharding_builder::AssignDevice(0);
+      *tuple_sharding.add_tuple_shardings() = sharding_builder::SingleDevice(0);
       XlaScopedShardingAssignment scoped_sharding(this, tuple_sharding);
       TF_RETURN_IF_ERROR(make_outfeed(token));
     } else {
@@ -3517,11 +3566,18 @@ XlaOp XlaBuilder::AllGatherImpl(const XlaOp operand,
       operands.push_back(operand);
     }
 
-    TF_ASSIGN_OR_RETURN(Shape inferred_shape,
-                        ShapeInference::InferAllGatherShape(
-                            operand_shapes, all_gather_dimension, shard_count));
+    TF_ASSIGN_OR_RETURN(
+        Shape inferred_shape,
+        async ? ShapeInference::InferAllGatherStartShape(
+                    operand_shapes, all_gather_dimension, shard_count)
+              : ShapeInference::InferAllGatherShape(
+                    operand_shapes, all_gather_dimension, shard_count));
     if (layout) {
-      *inferred_shape.mutable_layout() = *layout;
+      if (async) {
+        *inferred_shape.mutable_tuple_shapes(0)->mutable_layout() = *layout;
+      } else {
+        *inferred_shape.mutable_layout() = *layout;
+      }
       instr.set_constrain_layout(true);
     }
     *instr.mutable_shape() = inferred_shape.ToProto();
@@ -3634,6 +3690,187 @@ absl::StatusOr<XlaOp> XlaBuilder::ReduceInternal(
 
     TF_RETURN_IF_ERROR(AddCalledComputation(computation, instr));
     return AddInstruction(std::move(instr), HloOpcode::kReduce, all_operands);
+  });
+}
+
+XlaOp XlaBuilder::Scan(absl::Span<const XlaOp> inputs,
+                       absl::Span<const XlaOp> inits,
+                       const XlaComputation& computation,
+                       int64_t scan_dimension,
+                       std::optional<int64_t> scan_dimension_size,
+                       bool is_reverse, TriState is_associative) {
+  return Scan(inputs, inits, AddSubComputation(computation), scan_dimension,
+              scan_dimension_size, is_reverse, is_associative);
+}
+
+namespace {
+
+absl::Status VerifyScan(const ProgramShape& program_shape,
+                        absl::Span<const Shape* const> input_shapes,
+                        absl::Span<const Shape* const> init_shapes,
+                        int64_t scan_dimension,
+                        std::optional<int64_t> scan_dimension_size) {
+  // Validate number of parameters
+  if (program_shape.parameters_size() !=
+      init_shapes.size() + input_shapes.size()) {
+    return InvalidArgument(
+        "Scan computation expects %d parameters, but got %d.",
+        init_shapes.size() + input_shapes.size(),
+        program_shape.parameters_size());
+  }
+
+  // Validate scan_dimension_size
+  for (int i = 0; i < input_shapes.size(); ++i) {
+    const Shape* s = input_shapes[i];
+    if (scan_dimension < 0 || scan_dimension >= s->dimensions().size()) {
+      return InvalidArgument("Scan dimension %d out of bounds for operand %d",
+                             scan_dimension, i);
+    }
+    int64_t current_scan_dimension_size = s->dimensions(scan_dimension);
+    if (!scan_dimension_size.has_value()) {
+      scan_dimension_size = current_scan_dimension_size;
+    } else if (*scan_dimension_size != current_scan_dimension_size) {
+      return InvalidArgument("Mismatching scan dimension sizes");
+    }
+  }
+
+  for (int i = 0; i < input_shapes.size(); ++i) {
+    int param_idx = i;
+    Shape expected_input_element_shape = *input_shapes[i];
+    expected_input_element_shape.DeleteDimension(scan_dimension);
+    if (!ShapeUtil::Compatible(expected_input_element_shape,
+                               program_shape.parameters(param_idx))) {
+      return InvalidArgument(
+          "Scan computation parameter %d shape %s does not match input "
+          "element shape %s",
+          param_idx,
+          ShapeUtil::HumanString(program_shape.parameters(param_idx)),
+          ShapeUtil::HumanString(expected_input_element_shape));
+    }
+  }
+
+  // Validate parameter shapes
+  for (int i = 0; i < init_shapes.size(); ++i) {
+    int param_idx = input_shapes.size() + i;
+    if (!ShapeUtil::Compatible(*init_shapes[i],
+                               program_shape.parameters(param_idx))) {
+      return InvalidArgument(
+          "Scan computation parameter %d shape %s does not match init shape "
+          "%s",
+          param_idx,
+          ShapeUtil::HumanString(program_shape.parameters(param_idx)),
+          ShapeUtil::HumanString(*init_shapes[i]));
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<Shape> InferScanShape(
+    const ProgramShape& program_shape,
+    absl::Span<const Shape* const> input_shapes,
+    absl::Span<const Shape* const> init_shapes, int64_t scan_dimension,
+    std::optional<int64_t> scan_dimension_size) {
+  const Shape& result_shape = program_shape.result();
+  std::vector<Shape> scan_result_shapes;
+  if (result_shape.IsTuple()) {
+    for (const auto& s : result_shape.tuple_shapes()) {
+      scan_result_shapes.push_back(s);
+    }
+  } else {
+    scan_result_shapes.push_back(result_shape);
+  }
+
+  if (scan_result_shapes.size() < init_shapes.size()) {
+    return InvalidArgument(
+        "Scan computation must return at least %d elements (carries), but "
+        "got %d.",
+        init_shapes.size(), scan_result_shapes.size());
+  }
+
+  int64_t num_carries = init_shapes.size();
+  int64_t num_outputs = scan_result_shapes.size() - num_carries;
+
+  if (!scan_dimension_size.has_value()) {
+    if (input_shapes.empty()) {
+      return InvalidArgument(
+          "Scan dimension size cannot be inferred when there are no inputs "
+          "and scan_dimension_size is not provided.");
+    }
+    scan_dimension_size = input_shapes[0]->dimensions(scan_dimension);
+  }
+
+  // Construct final shape
+  std::vector<Shape> final_shapes;
+  final_shapes.reserve(num_outputs + num_carries);
+  for (int i = 0; i < num_outputs; ++i) {
+    Shape output_element_shape = scan_result_shapes[i];
+    // Create array shape by inserting scan_dimension_size at scan_dimension
+    std::vector<int64_t> dims(output_element_shape.dimensions().begin(),
+                              output_element_shape.dimensions().end());
+    dims.insert(dims.begin() + scan_dimension, *scan_dimension_size);
+    final_shapes.push_back(
+        ShapeUtil::MakeShape(output_element_shape.element_type(), dims));
+  }
+  for (int i = 0; i < num_carries; ++i) {
+    // Verify carries
+    if (!ShapeUtil::Compatible(*init_shapes[i],
+                               scan_result_shapes[num_outputs + i])) {
+      return InvalidArgument(
+          "Scan computation result %d shape %s does not match init shape %s",
+          num_outputs + i,
+          ShapeUtil::HumanString(scan_result_shapes[num_outputs + i]),
+          ShapeUtil::HumanString(*init_shapes[i]));
+    }
+    final_shapes.push_back(scan_result_shapes[num_outputs + i]);
+  }
+
+  return ShapeUtil::MakeTupleShape(final_shapes);
+}
+
+}  // namespace
+
+XlaOp XlaBuilder::Scan(absl::Span<const XlaOp> inputs,
+                       absl::Span<const XlaOp> inits,
+                       XlaComputationId computation, int64_t scan_dimension,
+                       std::optional<int64_t> scan_dimension_size,
+                       bool is_reverse, TriState is_associative) {
+  return ReportErrorOrReturn([&]() -> absl::StatusOr<XlaOp> {
+    std::vector<const Shape*> init_shapes;
+    for (const auto& init : inits) {
+      TF_ASSIGN_OR_RETURN(const Shape* s, GetShapePtr(init));
+      init_shapes.push_back(s);
+    }
+    std::vector<const Shape*> input_shapes;
+    for (const auto& input : inputs) {
+      TF_ASSIGN_OR_RETURN(const Shape* s, GetShapePtr(input));
+      input_shapes.push_back(s);
+    }
+
+    TF_ASSIGN_OR_RETURN(ProgramShape program_shape,
+                        GetSubcomputationShape(computation));
+
+    TF_RETURN_IF_ERROR(VerifyScan(program_shape, input_shapes, init_shapes,
+                                  scan_dimension, scan_dimension_size));
+
+    TF_ASSIGN_OR_RETURN(Shape final_shape,
+                        InferScanShape(program_shape, input_shapes, init_shapes,
+                                       scan_dimension, scan_dimension_size));
+
+    int64_t num_carries = inits.size();
+    HloInstructionProto instr;
+    *instr.mutable_shape() = final_shape.ToProto();
+    instr.add_dimensions(scan_dimension);
+    instr.set_is_reverse(is_reverse);
+    instr.set_num_carries(num_carries);
+    instr.set_is_associative(is_associative);
+    TF_RETURN_IF_ERROR(AddCalledComputation(computation, instr));
+
+    std::vector<XlaOp> all_operands;
+    all_operands.reserve(inits.size() + inputs.size());
+    all_operands.insert(all_operands.end(), inputs.begin(), inputs.end());
+    all_operands.insert(all_operands.end(), inits.begin(), inits.end());
+
+    return AddInstruction(std::move(instr), HloOpcode::kScan, all_operands);
   });
 }
 
@@ -4067,8 +4304,8 @@ XlaOp XlaBuilder::AllToAllArray(
 
     if (is_unbounded) {
       std::vector<bool> dynamic_dimensions;
-      std::transform(
-          sizes.begin(), sizes.end(), std::back_inserter(dynamic_dimensions),
+      absl::c_transform(
+          sizes, std::back_inserter(dynamic_dimensions),
           [](int64_t size) { return size == Shape::kUnboundedSize; });
       TF_ASSIGN_OR_RETURN(
           const Shape shape,
@@ -4262,9 +4499,15 @@ XlaOp XlaBuilder::CollectivePermuteImpl(
   return ReportErrorOrReturn([&]() -> absl::StatusOr<XlaOp> {
     TF_ASSIGN_OR_RETURN(const Shape* operand_shape, GetShapePtr(operand));
     HloInstructionProto instr;
-    TF_ASSIGN_OR_RETURN(
-        Shape shape,
-        ShapeInference::InferCollectivePermuteShape({operand_shape}, inplace));
+    Shape shape;
+    if (async) {
+      TF_ASSIGN_OR_RETURN(shape,
+                          ShapeInference::InferCollectivePermuteStartShape(
+                              {operand_shape}, {}, inplace));
+    } else {
+      TF_ASSIGN_OR_RETURN(shape, ShapeInference::InferCollectivePermuteShape(
+                                     {operand_shape}, inplace));
+    }
     *instr.mutable_shape() = shape.ToProto();
 
     for (const auto& pair : source_target_pairs) {
@@ -4298,11 +4541,16 @@ XlaOp XlaBuilder::CollectivePermuteImpl(
     }
     CHECK_GT(operand_shapes.size(), 1);
     HloInstructionProto instr;
-    TF_ASSIGN_OR_RETURN(
-        Shape shape,
-        ShapeInference::InferCollectivePermuteShape(operand_shapes, inplace));
-    *instr.mutable_shape() =
-        ShapeUtil::MakeTupleShapeWithPtrs(operand_shapes).ToProto();
+    Shape shape;
+    if (async) {
+      TF_ASSIGN_OR_RETURN(shape,
+                          ShapeInference::InferCollectivePermuteStartShape(
+                              operand_shapes, {}, inplace));
+    } else {
+      TF_ASSIGN_OR_RETURN(shape, ShapeInference::InferCollectivePermuteShape(
+                                     operand_shapes, inplace));
+    }
+    *instr.mutable_shape() = shape.ToProto();
 
     for (const auto& pair : source_target_pairs) {
       auto* proto_pair = instr.add_source_target_pairs();
@@ -5761,6 +6009,34 @@ XlaOp Reduce(XlaBuilder* builder, absl::Span<const XlaOp> operands,
              absl::Span<const int64_t> dimensions_to_reduce) {
   return Reduce(builder, operands, init_values,
                 builder->AddSubComputation(computation), dimensions_to_reduce);
+}
+
+XlaOp Scan(absl::Span<const XlaOp> inputs, absl::Span<const XlaOp> inits,
+           const XlaComputation& computation, int64_t scan_dimension,
+           std::optional<int64_t> scan_dimension_size, bool is_reverse,
+           TriState is_associative) {
+  if (inputs.empty()) {
+    return inits[0].builder()->Scan(inputs, inits, computation, scan_dimension,
+                                    scan_dimension_size, is_reverse,
+                                    is_associative);
+  }
+  return inputs[0].builder()->Scan(inputs, inits, computation, scan_dimension,
+                                   scan_dimension_size, is_reverse,
+                                   is_associative);
+}
+
+XlaOp Scan(absl::Span<const XlaOp> inputs, absl::Span<const XlaOp> inits,
+           XlaComputationId computation, int64_t scan_dimension,
+           std::optional<int64_t> scan_dimension_size, bool is_reverse,
+           TriState is_associative) {
+  if (inputs.empty()) {
+    return inits[0].builder()->Scan(inputs, inits, computation, scan_dimension,
+                                    scan_dimension_size, is_reverse,
+                                    is_associative);
+  }
+  return inputs[0].builder()->Scan(inputs, inits, computation, scan_dimension,
+                                   scan_dimension_size, is_reverse,
+                                   is_associative);
 }
 
 XlaOp ReduceAll(const XlaOp operand, const XlaOp init_value,

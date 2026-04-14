@@ -19,6 +19,7 @@ limitations under the License.
 #include <optional>
 
 #include "xla/hlo/builder/xla_builder.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 
@@ -84,10 +85,14 @@ XlaOp RoundToEven(XlaOp x);
 // Trigonometric functions
 
 // Computes the arc cosine of 'x'.
-XlaOp Acos(XlaOp x);
+XlaOp Acos(XlaOp x,
+           const std::optional<ResultAccuracy>& result_accuracy = std::nullopt,
+           bool expand = true);
 
 // Computes the arc sine of 'x'.
-XlaOp Asin(XlaOp x);
+XlaOp Asin(XlaOp x,
+           const std::optional<ResultAccuracy>& result_accuracy = std::nullopt,
+           bool expand = true);
 
 // Computes the arc tangent of 'x'.
 XlaOp Atan(XlaOp x);
@@ -100,16 +105,24 @@ XlaOp Acosh(XlaOp x,
             bool expand = true);
 
 // Computes the inverse hyperbolic sine of 'x'.
-XlaOp Asinh(XlaOp x);
+XlaOp Asinh(XlaOp x,
+            const std::optional<ResultAccuracy>& result_accuracy = std::nullopt,
+            bool expand = true);
 
 // Computes the inverse hyperbolic tangent of 'x'.
-XlaOp Atanh(XlaOp x);
+XlaOp Atanh(XlaOp x,
+            const std::optional<ResultAccuracy>& result_accuracy = std::nullopt,
+            bool expand = true);
 
 // Computes the hyperbolic cosine of 'x'.
-XlaOp Cosh(XlaOp x);
+XlaOp Cosh(XlaOp x,
+           const std::optional<ResultAccuracy>& result_accuracy = std::nullopt,
+           bool expand = true);
 
 // Computes the hyperbolic sine of 'x'.
-XlaOp Sinh(XlaOp x);
+XlaOp Sinh(XlaOp x,
+           const std::optional<ResultAccuracy>& result_accuracy = std::nullopt,
+           bool expand = true);
 
 // Applies a complex conjugation operation if 'a' is complex and 'conjugate'
 // is true, otherwise returns its argument.

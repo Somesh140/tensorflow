@@ -39,10 +39,13 @@ limitations under the License.
 #include "xla/pjrt/pjrt_compiler.h"
 #include "xla/pjrt/pjrt_device_description.h"
 #include "xla/pjrt/pjrt_executable.h"
+#include "xla/pjrt/proto/topology_description.pb.h"
+#include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/platform/test.h"
+#include "xla/xla_data.pb.h"
 #include "tsl/platform/path.h"
 
 namespace {
@@ -73,9 +76,7 @@ class TestTopology : public xla::PjRtTopologyDescription {
     return {};
   }
 
-  absl::StatusOr<std::string> Serialize() const override {
-    return "test_topology_serialized";
-  }
+  absl::StatusOr<uint64_t> Fingerprint() const override { return 123; }
 
   const absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute>& Attributes()
       const override {
@@ -131,7 +132,7 @@ TEST(DumpTest, DumpCompileInputs) {
   mlir::MLIRContext context;
   mlir::OpBuilder builder(&context);
   mlir::OwningOpRef<mlir::ModuleOp> module =
-      builder.create<mlir::ModuleOp>(builder.getUnknownLoc());
+      xla::llvm_ir::CreateMlirModuleOp(builder.getUnknownLoc());
   auto topology = std::make_unique<TestTopology>();
 
   // Dump compile inputs.
@@ -168,7 +169,7 @@ TEST(MaybeDumpCompileInputsTest, XlaDumpToNotSet) {
   mlir::MLIRContext context;
   mlir::OpBuilder builder(&context);
   mlir::OwningOpRef<mlir::ModuleOp> module =
-      builder.create<mlir::ModuleOp>(builder.getUnknownLoc());
+      xla::llvm_ir::CreateMlirModuleOp(builder.getUnknownLoc());
   auto topology = std::make_unique<TestTopology>();
 
   // xla_dump_to not set
@@ -192,7 +193,7 @@ TEST(MaybeDumpCompileInputsTest, XlaDumpToSet) {
   mlir::MLIRContext context;
   mlir::OpBuilder builder(&context);
   mlir::OwningOpRef<mlir::ModuleOp> module =
-      builder.create<mlir::ModuleOp>(builder.getUnknownLoc());
+      xla::llvm_ir::CreateMlirModuleOp(builder.getUnknownLoc());
   auto topology = std::make_unique<TestTopology>();
 
   // Set xla_dump_to and dump compile inputs.

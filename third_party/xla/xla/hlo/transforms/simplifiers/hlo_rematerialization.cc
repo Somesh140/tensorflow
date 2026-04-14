@@ -1917,6 +1917,31 @@ absl::StatusOr<int64_t> RematerializeInstructions(
         // to avoid an infinite loop.
         instruction_list->Denylist(remat);
       }
+      // Peak priority specific cleanup. If the source (best) instruction
+      // is dead, we are forced to remove it from the computation immediately
+      // before any other rematerialization occurs. Otherwise, the dead
+      // instruction may influence instruction placement.
+      // TODO(b/486858124): Generalize this to all strategies.
+      if (rematerialization->remat_algorithm() ==
+          RematAlgorithm::kPeakPriority) {
+        TF_RETURN_IF_ERROR(best->DropAllControlDeps());
+        // Removes all leftover uses of best. These uses are inactive as the
+        // instruction has been rendered effectively dead by rematerialization.
+        while (!best->users().empty()) {
+          HloInstruction* user = best->users().front();
+          TF_RET_CHECK(user->IsDead())
+              << "User of instruction " << best->name()
+              << " killed by rematerialization is not dead or corrected: "
+              << user->name();
+          VLOG(3)
+              << "Deleting user " << user->name() << " of instruction "
+              << best->name()
+              << " because the instruction was killed by rematerialization.";
+          TF_RETURN_IF_ERROR(user->DropAllControlDeps());
+          TF_RETURN_IF_ERROR(computation->RemoveInstruction(user));
+        }
+        TF_RETURN_IF_ERROR(computation->RemoveInstruction(best));
+      }
       remat_move_instructions->insert(remat);
       net_instructions_added += indirect_users.size();
     } else {
@@ -2776,6 +2801,10 @@ HloRematerialization::PeakPriorityUpdateVariables(
   HloInstructionSequence sequence_from_list;
   for (auto* item = instruction_list.first(); item != nullptr;
        item = instruction_list.next(item)) {
+    // No parent means the instruction has already been deleted.
+    if (item->instruction->parent() == nullptr) {
+      continue;
+    }
     sequence_from_list.push_back(item->instruction);
   }
   TF_RETURN_IF_ERROR(HloRematerialization::UpdateScheduleFromSequence(
@@ -2984,6 +3013,12 @@ absl::StatusOr<bool> HloRematerialization::RematerializeComputation(
   for (auto* item = instruction_list.first(); item != nullptr;
        item = instruction_list.next(item)) {
     HloInstruction* instruction = item->instruction;
+    if (instruction->parent() == nullptr) {
+      // TODO(b/446297799): Stop it before it reaches this point.
+      VLOG(2) << "Instruction " << instruction->name()
+              << " is not in a computation. Ignoring";
+      continue;
+    }
     sequence.push_back(instruction);
   }
   rematerialized_computations_.insert(computation);
@@ -3010,7 +3045,7 @@ HloRematerialization::GetRematAlgorithmFunction(
   }
 }
 
-absl::StatusOr<bool> HloRematerialization::Run(
+absl::StatusOr<bool> HloRematerialization::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   if (options_.remat_mode_config.host_offload) {

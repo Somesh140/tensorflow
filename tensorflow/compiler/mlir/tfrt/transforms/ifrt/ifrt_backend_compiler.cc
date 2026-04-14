@@ -110,7 +110,8 @@ CompileAndRegisterIfrtPrograms(absl::string_view model_name,
             ifrt_model_context.GetIfrtServingCoreSelector(),
             ifrt_model_context.GetCompilationEnvOrOverrides(),
             ifrt_model_context.GetTfToHloCompiler(),
-            ifrt_model_context.GetPersistentCompilationCache()));
+            ifrt_model_context.GetPersistentCompilationCache(),
+            ifrt_model_context.GetH2DTransferExecutorFactory()));
 
     // Register the Ifrt program to `ServingExecutableRegistry` so that
     // the client TF program can invoke them via `IfrtCall` op.
@@ -129,8 +130,9 @@ absl::Status CompileTensorflowForIfrtServing(
   tsl::profiler::TraceMe trace_me("CompileTensorflowForIfrtServing");
   mlir::Builder builder(module.getContext());
 
-  TF_RETURN_IF_ERROR(
-      RunClusterToIfrtRuntimeOpsPassPipeline(module, model_name));
+  TF_RETURN_IF_ERROR(RunClusterToIfrtRuntimeOpsPassPipeline(
+      module, model_name,
+      ifrt_model_context.enable_propagate_static_shapes_pass()));
 
   TF_ASSIGN_OR_RETURN(
       auto handles,

@@ -61,10 +61,13 @@ namespace xla {
   V(kAllReduceStart, "all-reduce-start", kHloOpcodeIsVariadic)                 \
   V(kAllToAll, "all-to-all", kHloOpcodeIsVariadic)                             \
   V(kAnd, "and", 2)                                                            \
+  V(kAsin, "asin", 1)                                                          \
+  V(kAsinh, "asinh", 1)                                                        \
   V(kAsyncDone, "async-done", 1)                                               \
   V(kAsyncStart, "async-start", kHloOpcodeIsVariadic)                          \
   V(kAsyncUpdate, "async-update", 1)                                           \
   V(kAtan2, "atan2", 2)                                                        \
+  V(kAtanh, "atanh", 1)                                                        \
   V(kBatchNormGrad, "batch-norm-grad", 5)                                      \
   V(kBatchNormInference, "batch-norm-inference", 5)                            \
   V(kBatchNormTraining, "batch-norm-training", 3)                              \
@@ -92,6 +95,7 @@ namespace xla {
   V(kCopyDone, "copy-done", 1)                                                 \
   V(kCopyStart, "copy-start", 1)                                               \
   V(kCos, "cosine", 1)                                                         \
+  V(kCosh, "cosh", 1)                                                          \
   V(kCustomCall, "custom-call", kHloOpcodeIsVariadic)                          \
   V(kDivide, "divide", 2)                                                      \
   V(kDomain, "domain", 1)                                                      \
@@ -149,6 +153,7 @@ namespace xla {
   V(kRoundNearestEven, "round-nearest-even", 1)                                \
   V(kRsqrt, "rsqrt", 1)                                                        \
   V(kScaledDot, "scaled-dot", 4)                                               \
+  V(kScan, "scan", kHloOpcodeIsVariadic)                                       \
   V(kScatter, "scatter", kHloOpcodeIsVariadic)                                 \
   V(kSelect, "select", 3)                                                      \
   V(kSelectAndScatter, "select-and-scatter", 3)                                \

@@ -105,7 +105,7 @@ class ConcatenateDatasetOp::Dataset : public DatasetBase {
   }
 
   std::unique_ptr<IteratorBase> MakeIteratorInternal(
-      const string& prefix) const override {
+      const std::string& prefix) const override {
     return std::make_unique<Iterator>(Iterator::Params{
         this, name_utils::IteratorPrefix(kDatasetType, prefix)});
   }
@@ -124,7 +124,7 @@ class ConcatenateDatasetOp::Dataset : public DatasetBase {
     return output_shapes_;
   }
 
-  string DebugString() const override {
+  std::string DebugString() const override {
     return name_utils::DatasetDebugString(kDatasetType);
   }
 
@@ -155,7 +155,7 @@ class ConcatenateDatasetOp::Dataset : public DatasetBase {
     return to_concatenate_->CheckExternalState();
   }
 
-  absl::Status Get(OpKernelContext* ctx, int64 index,
+  absl::Status Get(OpKernelContext* ctx, int64_t index,
                    std::vector<Tensor>* out_tensors) const override {
     TF_RETURN_IF_ERROR(CheckRandomAccessCompatible(index));
     if (index < input_cardinality_) {
@@ -417,7 +417,7 @@ class ConcatenateDatasetOp::Dataset : public DatasetBase {
       TF_RETURN_IF_ERROR(reader->ReadScalar(prefix(), kIndex, &i_));
 
       if (!TF_PREDICT_TRUE(i_ >= 0 && i_ <= 2))
-        return errors::InvalidArgument("i_ must be in range [0, 2].");
+        return absl::InvalidArgumentError("i_ must be in range [0, 2].");
 
       if (!static_cast<bool>(input_uninitialized[0])) {
         TF_RETURN_IF_ERROR(RestoreInput(ctx, reader, input_impls_[0]));
@@ -477,7 +477,7 @@ void ConcatenateDatasetOp::MakeDataset(OpKernelContext* ctx, DatasetBase* input,
                                        DatasetBase* to_concatenate,
                                        DatasetBase** output) {
   OP_REQUIRES(ctx, input->output_dtypes() == to_concatenate->output_dtypes(),
-              errors::InvalidArgument(
+              errors::InvalidArgumentError(
                   "input dataset and dataset to concatenate"
                   " have different output_types %s and %s",
                   (DataTypeVectorString(input->output_dtypes()),

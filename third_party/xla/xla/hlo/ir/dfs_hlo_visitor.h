@@ -171,8 +171,17 @@ class DfsHloVisitorBase {
   virtual absl::Status HandleAcosh(HloInstructionPtr hlo) {
     return HandleElementwiseUnary(hlo);
   }
+  virtual absl::Status HandleAsin(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
+  virtual absl::Status HandleAsinh(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
   virtual absl::Status HandleAtan2(HloInstructionPtr hlo) {
     return HandleElementwiseBinary(hlo);
+  }
+  virtual absl::Status HandleAtanh(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
   }
   virtual absl::Status HandleRound(HloInstructionPtr hlo) {
     return HandleElementwiseUnary(hlo);
@@ -214,6 +223,9 @@ class DfsHloVisitorBase {
     return HandleElementwiseUnary(hlo);
   }
   virtual absl::Status HandleCos(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
+  virtual absl::Status HandleCosh(HloInstructionPtr hlo) {
     return HandleElementwiseUnary(hlo);
   }
   virtual absl::Status HandleSin(HloInstructionPtr hlo) {
@@ -298,6 +310,7 @@ class DfsHloVisitorBase {
   virtual absl::Status HandleRng(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleRngBitGenerator(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleRngGetAndUpdateState(HloInstructionPtr hlo) = 0;
+  virtual absl::Status HandleScan(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleScatter(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleSelectAndScatter(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleSlice(HloInstructionPtr hlo) = 0;

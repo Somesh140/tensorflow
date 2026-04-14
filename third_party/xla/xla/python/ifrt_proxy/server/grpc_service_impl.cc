@@ -69,9 +69,9 @@ namespace proxy {
     ::grpc::ServerReaderWriter<IfrtResponse, IfrtRequest>* stream) {
   GrpcIfrtSessionMetadata metadata;
   {
-    const auto it = context->client_metadata().find(
+    const auto [it, end] = context->client_metadata().equal_range(
         "ifrt-proxy-grpc-ifrt-session-metadata-bin");
-    if (it == context->client_metadata().end()) {
+    if (it == end) {
       return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT,
                             "Missing metadata for GrpcIfrtService.IfrtSession: "
                             "ifrt-proxy-grpc-ifrt-session-metadata-bin");
@@ -158,9 +158,9 @@ namespace proxy {
     ::grpc::ServerReader<GrpcHostBufferStoreRequest>* stream,
     GrpcHostBufferStoreResponse* response) {
   tsl::profiler::TraceMe traceme("HostBufferStore");
-  const auto it = context->client_metadata().find(
+  const auto [it, end] = context->client_metadata().equal_range(
       "ifrt-proxy-grpc-host-buffer-store-metadata-bin");
-  if (it == context->client_metadata().end()) {
+  if (it == end) {
     LOG(WARNING) << "Missing gRPC metadata for GrpcHostBufferService.Store";
     return ::grpc::Status(
         ::grpc::StatusCode::INTERNAL,
@@ -267,6 +267,19 @@ namespace proxy {
     return xla::ToGrpcStatus(store.status());
   }
   return xla::ToGrpcStatus((*store)->Delete(request->handle()));
+}
+
+::grpc::Status GrpcServiceImpl::HostBufferReadFromDisk(
+    ::grpc::ServerContext* context,
+    const GrpcHostBufferReadFromDiskRequest* request,
+    GrpcHostBufferReadFromDiskResponse* response) {
+  tsl::profiler::TraceMe traceme("HostBufferReadFromDisk");
+  auto store = GetHostBufferStore(request->metadata().session_id());
+  if (!store.ok()) {
+    return xla::ToGrpcStatus(store.status());
+  }
+  return xla::ToGrpcStatus(
+      (*store)->ReadFromDisk(request->metadata().handle()));
 }
 
 bool GrpcServiceImpl::Test_InsertHostBufferStore(

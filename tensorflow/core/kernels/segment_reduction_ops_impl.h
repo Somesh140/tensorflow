@@ -22,6 +22,7 @@ limitations under the License.
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 #include <vector>
 
@@ -503,7 +504,7 @@ class UnsortedSegmentReductionOp : public OpKernel {
                        this, context, data, segment_ids, num_segments));
     const auto segment_flat = segment_ids.flat<Index>();
     const Index output_rows = internal::SubtleMustCopy(static_cast<Index>(
-        num_segments.dtype() == DT_INT32 ? num_segments.scalar<int32>()()
+        num_segments.dtype() == DT_INT32 ? num_segments.scalar<int32_t>()()
                                          : num_segments.scalar<int64_t>()()));
     OP_REQUIRES(context, output_rows >= 0,
                 errors::InvalidArgument("Input num_segments == ", output_rows,
@@ -564,7 +565,7 @@ class SparseSegmentReductionOpBase : public OpKernel {
       const Tensor& num_segments = context->input(3);
       // Note that there is a Tnumsegments parameter on the op, but it is not
       // plumbed through to here and so always takes its default value of int32.
-      output_rows = internal::SubtleMustCopy(num_segments.scalar<int32>()());
+      output_rows = internal::SubtleMustCopy(num_segments.scalar<int32_t>()());
     }
     const int64_t num_indices = indices.NumElements();
 
@@ -576,7 +577,9 @@ class SparseSegmentReductionOpBase : public OpKernel {
     // sorted.
     const SegmentId last_segment_id =
         num_indices > 0 ? segment_vec(num_indices - 1) : 0;
-    int64_t limit = dtidx_ == DataType::DT_INT32 ? kint32max : kint64max;
+    int64_t limit = dtidx_ == DataType::DT_INT32
+                        ? std::numeric_limits<int32_t>::max()
+                        : std::numeric_limits<int64_t>::max();
 
     OP_REQUIRES(
         context, last_segment_id < limit,
@@ -953,7 +956,7 @@ class SparseSegmentReductionOpBase<GPUDevice, T, Index, SegmentId>
       const Tensor& num_segments_t = context->input(3);
       SegmentId num_segments =
           internal::SubtleMustCopy(num_segments_t.dtype() == DT_INT32
-                                       ? num_segments_t.scalar<int32>()()
+                                       ? num_segments_t.scalar<int32_t>()()
                                        : num_segments_t.scalar<int64_t>()());
       *last_segment_id_host.mutable_data() = num_segments - 1;
       create_and_check_output();
@@ -1312,7 +1315,8 @@ class SparseSegmentGradOpBase : public OpKernel {
     OP_REQUIRES(context, N == segment_ids.NumElements(),
                 errors::InvalidArgument(
                     "segment_ids and indices should have same size."));
-    const SegmentId M = internal::SubtleMustCopy(output_dim0.scalar<int32>()());
+    const SegmentId M =
+        internal::SubtleMustCopy(output_dim0.scalar<int32_t>()());
 
     auto input_flat = input.flat_outer_dims<T>();
     const auto indices_vec = indices.vec<Index>();

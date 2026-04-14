@@ -40,7 +40,7 @@ limitations under the License.
 
 namespace xla {
 
-absl::StatusOr<bool> AllReduceSimplifier::Run(
+absl::StatusOr<bool> AllReduceSimplifier::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   TF_ASSIGN_OR_RETURN(
@@ -101,6 +101,11 @@ absl::StatusOr<bool> AllReduceSimplifier::Run(
         continue;
       }
       if (!inst->IsCrossReplicaAllReduce() && !inst->IsCrossModuleAllReduce()) {
+        continue;
+      }
+      if (inst->opcode() == HloOpcode::kAllReduceStart ||
+          inst->opcode() == HloOpcode::kAllReduceDone) {
+        // TODO: b/501070020 - Support asynchronous all-reduce.
         continue;
       }
       TF_ASSIGN_OR_RETURN(int64_t group_size,

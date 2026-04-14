@@ -28,13 +28,15 @@ limitations under the License.
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/service/compiler.h"
 #include "xla/service/executable.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/gpu/nvptx_compiler.h"
 #include "xla/service/platform_util.h"
 #include "xla/stream_executor/device_description.pb.h"
-#include "xla/tsl/platform/status_matchers.h"
+#include "xla/stream_executor/gpu/tma_metadata.h"
+#include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/util/proto/proto_matchers.h"
 #include "xla/xla.pb.h"
@@ -44,10 +46,9 @@ namespace gpu {
 
 using ::tsl::proto_testing::EqualsProto;
 
-// Counts the number of configs with is_tma_allowed set to true.
-int CountTmaAllowed(
-    const std::vector<std::unique_ptr<BackendConfig>>& configs) {
-  return std::count_if(configs.begin(), configs.end(), [](auto& config) {
+// Checks if any config has is_tma_allowed set to true.
+bool AnyTmaAllowed(const std::vector<std::unique_ptr<BackendConfig>>& configs) {
+  return std::any_of(configs.begin(), configs.end(), [](auto& config) {
     BlockLevelFusionConfig actual_config;
     if (!config->UnpackTo(&actual_config)) {
       return false;
@@ -65,19 +66,18 @@ class TritonBlockLevelFusionEmitterBackendTest
     : public HloHardwareIndependentTestBase {
  protected:
   TritonBlockLevelFusionEmitterBackendTest()
-      : backend_(PlatformUtil::GetDefaultPlatform()
-                     .value()
-                     ->ExecutorForDevice(0)
-                     .value(),
-                 &debug_options_, &compiler_,
-                 compiler_.ShapeSizeBytesFunction()) {
-    // TODO(b/315957220): Remove the experimental flags once TMA is enabled by
-    // default.
-    debug_options_.set_xla_gpu_experimental_enable_triton_tma(true);
-  }
+      : stream_executor_(PlatformUtil::GetDefaultPlatform()
+                             .value()
+                             ->ExecutorForDevice(0)
+                             .value()),
+        target_config_(stream_executor_),
+        backend_(&debug_options_, &compiler_,
+                 compiler_.ShapeSizeBytesFunction(), &target_config_) {}
 
   DebugOptions debug_options_;
   NVPTXCompiler compiler_;
+  se::StreamExecutor* stream_executor_;
+  Compiler::GpuTargetConfig target_config_;
   BlockLevelEmitterBackend backend_;
 };
 
@@ -200,23 +200,15 @@ ENTRY %main {
       backend_.GetSupportedConfigs(
           *(module->entry_computation()->root_instruction())));
 
-  // If device supports TMA, the backend should generate 70 combinations:
-  // (7 x 5) x 2.
-  // Expect 70 total configurations:
+  // Expect 35 configurations without TMA:
   // - 7 choices for d0 (output dim 0 = 64): 1, 2, 4, 8, 16, 32, 64
   // - 5 choices for d2 (output dim 2 = 16): 1, 2, 4, 8, 16
-  // - 2 choices for is_tma_allowed: true, false
   // The middle dimension (d1 = 1) must always have tile size 1.
-  //
-  // If device doesn't support TMA, we currently expect half the number (35).
-  bool is_tma_supported = backend_.target_config()
-                              .device_description.cuda_compute_capability()
-                              .IsAtLeastHopper();
-  if (is_tma_supported) {
-    ASSERT_EQ(configs.size(), 70);
-    // The current TMA autotuning duplicates the given configurations with
-    // is_tma_allowed set to true.
-    EXPECT_EQ(CountTmaAllowed(configs), configs.size() / 2);
+  if (stream_executor::gpu::IsTmaAvailableForDevice(
+          backend_.target_config().device_description)) {
+    ASSERT_GT(configs.size(), 35);
+    // Check that TMA configurations are generated.
+    EXPECT_TRUE(AnyTmaAllowed(configs));
   } else {
     ASSERT_EQ(configs.size(), 35);
   }
@@ -225,8 +217,6 @@ ENTRY %main {
 
   // Iterate over all expected tile size combinations for d0 and d2.
   // (d1 is fixed at 1 as per the input shape [16,1,64]).
-  // TMA configurations repeat in the 2nd half of the configs. We already
-  // checked them, so we don't inspect them here.
   for (int d0 : {1, 2, 4, 8, 16, 32, 64}) {
     for (int d2 : {1, 2, 4, 8, 16}) {
       BlockLevelFusionConfig block_level_fusion_config;
@@ -284,21 +274,15 @@ backend_config={"fusion_backend_config":{"kind":"__triton"}}
       backend_.GetSupportedConfigs(
           *(module->entry_computation()->root_instruction())));
 
-  // If device supports TMA, expect 40 total configurations:
+  // Expect 20 configurations without TMA:
   // - 5 choices for d0 (output dim 0 = 10): 1, 2, 4, 8, 16
   // - 4 choices for d2 (output dim 2 = 8): 1, 2, 4, 8
-  // - 2 choices for is_tma_allowed: true, false
   // The middle dimension (d1 = 0) must always have tile size 0.
-  //
-  // If device doesn't support TMA, we currently expect half the number (20).
-  bool is_tma_supported = backend_.target_config()
-                              .device_description.cuda_compute_capability()
-                              .IsAtLeastHopper();
-  if (is_tma_supported) {
-    ASSERT_EQ(configs.size(), 40);
-    // The current TMA autotuning duplicates the given configurations with
-    // is_tma_allowed set to true.
-    EXPECT_EQ(CountTmaAllowed(configs), configs.size() / 2);
+  if (stream_executor::gpu::IsTmaAvailableForDevice(
+          backend_.target_config().device_description)) {
+    ASSERT_GT(configs.size(), 20);
+    // Check that TMA configurations are generated.
+    EXPECT_TRUE(AnyTmaAllowed(configs));
   } else {
     ASSERT_EQ(configs.size(), 20);
   }
@@ -307,8 +291,6 @@ backend_config={"fusion_backend_config":{"kind":"__triton"}}
 
   // Iterate over tile size combinations for dimensions 0 and 2.
   // Dimension 1 (middle) is zero-sized, so its tile size is fixed to 0.
-  // TMA configurations repeat in the 2nd half of the configs. We already
-  // checked them, so we don't inspect them here.
   for (int d0 : {1, 2, 4, 8, 16}) {
     for (int d2 : {1, 2, 4, 8}) {
       BlockLevelFusionConfig block_level_fusion_config;
@@ -450,9 +432,8 @@ ENTRY %main {
 
 TEST_F(TritonBlockLevelFusionEmitterBackendTest, UseDefaultConfigFlag) {
   auto backend = BlockLevelEmitterBackend(
-      PlatformUtil::GetDefaultPlatform().value()->ExecutorForDevice(0).value(),
       &debug_options_, &compiler_, compiler_.ShapeSizeBytesFunction(),
-      /*use_default_config=*/true);
+      &target_config_, /*use_default_config=*/true);
   // Parse an HLO module containing a kCustom Triton fusion with a backend
   // config that includes block-level tiling parameters.
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,

@@ -93,13 +93,19 @@ absl::Status ConvertMlirHloToHlo(mlir::ModuleOp module,
 absl::StatusOr<std::unique_ptr<xla::HloModule>> ConvertMlirHloToHloModule(
     mlir::ModuleOp module, MlirToHloConversionOptions options = {});
 
-// Transforms a Block into HLO, where the HLO is represented as calls into an
-// XlaBuilder. Callee functions are allowed in the Block's ancestor ModuleOp.
-// xla_params are inputs to block. returns are the returned XlaOps.
-absl::Status BuildHloFromMlirHlo(mlir::Block& block, xla::XlaBuilder& builder,
+// Transforms a ModuleOp into HLO, where the HLO is represented as calls into an
+// XlaBuilder. Callee functions are allowed in the ModuleOp. xla_params are
+// inputs to the main block. Returns are the returned XlaOps.
+absl::Status BuildHloFromMlirHlo(mlir::ModuleOp& module,
+                                 xla::XlaBuilder& builder,
                                  llvm::ArrayRef<xla::XlaOp> xla_params,
                                  std::vector<xla::XlaOp>& returns,
                                  MlirToHloConversionOptions options = {});
+
+// Returns an OriginalValueProto from the "original_value" attribute of the op.
+// Returns std::nullopt if the op doesn't have the attribute.
+std::optional<xla::OriginalValueProto> CreateOriginalValueFromOp(
+    mlir::Operation* op);
 
 }  // namespace mlir
 

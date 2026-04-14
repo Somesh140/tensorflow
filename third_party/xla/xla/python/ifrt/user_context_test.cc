@@ -18,10 +18,9 @@ limitations under the License.
 #include <string>
 
 #include <gtest/gtest.h>
-#include "absl/strings/str_cat.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
-#include "llvm/Support/ExtensibleRTTI.h"
+#include "xla/python/ifrt/user_context_test_util.h"
 #include "xla/tsl/concurrency/ref_count.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/threadpool.h"
@@ -31,40 +30,20 @@ namespace ifrt {
 
 namespace {
 
-class TestUserContext : public llvm::RTTIExtends<TestUserContext, UserContext> {
- public:
-  static UserContextRef Create(UserContextId id) {
-    return tsl::TakeRef<TestUserContext>(new TestUserContext(id));
-  }
-
-  UserContextId Id() const override { return id_; }
-
-  std::string DebugString() const override {
-    return absl::StrCat("user context ", id_.value());
-  }
-
-  // No new `ID` is not defined because tests below do not exercise RTTI.
-
- private:
-  explicit TestUserContext(UserContextId id) : id_(id) {}
-
-  UserContextId id_;
-};
-
 TEST(AnnotatedUserContextTest, Id) {
   const UserContextId kUserContextId(100);
   UserContextRef context = TestUserContext::Create(kUserContextId);
 
   UserContextRef annotated_context1 =
-      AnnotatedUserContext::Create(context, "test annotation");
+      AnnotatedUserContext::Create(context, "; test annotation");
   EXPECT_NE(annotated_context1->Id(), context->Id());
 
   UserContextRef annotated_context2 =
-      AnnotatedUserContext::Create(context, "test annotation 2");
+      AnnotatedUserContext::Create(context, "; test annotation 2");
   EXPECT_NE(annotated_context2->Id(), annotated_context1->Id());
 
   UserContextRef annotated_context3 =
-      AnnotatedUserContext::Create(UserContextRef(), "test annotation");
+      AnnotatedUserContext::Create(UserContextRef(), "; test annotation");
   EXPECT_NE(annotated_context3->Id(), annotated_context1->Id());
 }
 
@@ -73,13 +52,21 @@ TEST(AnnotatedUserContextTest, DebugString) {
     const UserContextId kUserContextId(100);
     UserContextRef context = TestUserContext::Create(kUserContextId);
     UserContextRef annotated_context =
-        AnnotatedUserContext::Create(context, "test annotation");
+        AnnotatedUserContext::Create(context, "; test annotation");
     EXPECT_EQ(annotated_context->DebugString(),
-              "user context 100; test annotation");
+              "TestUserContext(100); test annotation");
+  }
+  {
+    const UserContextId kUserContextId(200);
+    UserContextRef context = TestUserContext::Create(kUserContextId);
+    UserContextRef annotated_context =
+        AnnotatedUserContext::Create("test annotation: ", context);
+    EXPECT_EQ(annotated_context->DebugString(),
+              "test annotation: TestUserContext(200)");
   }
   {
     UserContextRef annotated_context =
-        AnnotatedUserContext::Create(UserContextRef(), "test annotation");
+        AnnotatedUserContext::Create(UserContextRef(), "; test annotation");
     EXPECT_EQ(annotated_context->DebugString(),
               "(nullptr user context); test annotation");
   }
@@ -104,8 +91,8 @@ TEST(ChainedUserContextTest, DebugString) {
   UserContextRef chained_context =
       ChainedUserContext::Create({context1, UserContextRef(), context2});
   EXPECT_EQ(chained_context->DebugString(),
-            "user context 100\n\n ->\n\n(nullptr user context)\n\n ->\n\nuser "
-            "context 200");
+            "TestUserContext(100)\n\n ->\n\n(nullptr user context)\n\n "
+            "->\n\nTestUserContext(200)");
 }
 
 TEST(FusedUserContextTest, Id) {
@@ -127,8 +114,8 @@ TEST(FusedUserContextTest, DebugString) {
   UserContextRef fused_context =
       FusedUserContext::Create({context1, UserContextRef(), context2});
   EXPECT_EQ(fused_context->DebugString(),
-            "Fused user context: {\n\nuser context 100\n\n(nullptr user "
-            "context)\n\nuser context 200\n\n}");
+            "Fused user context: {\n\nTestUserContext(100)\n\n(nullptr user "
+            "context)\n\nTestUserContext(200)\n\n}");
 }
 
 TEST(UserContextScopeTest, NullContext) {

@@ -24,17 +24,13 @@ limitations under the License.
 #include <vector>
 
 #include "absl/base/no_destructor.h"
-#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
-#include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/hlo/utils/pointer_utils.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/tuple_tree.h"
@@ -159,9 +155,9 @@ OriginalValueProto OriginalValue::ToProto() const {
   if (is_synthetic_call()) {
     original_value_proto.set_is_synthetic_call(true);
   } else {
-    tree().ForEachElement([&original_value_proto](
-                              const ShapeIndex& index,
-                              const std::optional<OriginalArray>& value) {
+    for (const auto& leaf_it : original_arrays()) {
+      const ShapeIndex& index = leaf_it.first;
+      const std::optional<OriginalArray>& value = leaf_it.second;
       OriginalValueElementProto* original_value_node_proto =
           original_value_proto.add_elements();
       for (const auto& i : index) {
@@ -170,7 +166,7 @@ OriginalValueProto OriginalValue::ToProto() const {
       if (value.has_value()) {
         *original_value_node_proto->mutable_original_array() = value->ToProto();
       }
-    });
+    }
   }
   return original_value_proto;
 }
@@ -219,12 +215,14 @@ std::shared_ptr<OriginalValue> OriginalValue::CreateFromInstruction(
   if (instruction->opcode() == HloOpcode::kTuple) {
     auto original_value = std::make_shared<OriginalValue>(
         TupleTree<std::optional<OriginalArray>>(instruction->shape()));
+    bool has_original_value = false;
     for (int64_t i = 0; i < instruction->operand_count(); ++i) {
       const HloInstruction* operand = instruction->operand(i);
       auto op_original_value = operand->original_value();
       if (!op_original_value || op_original_value->is_synthetic_call()) {
-        return nullptr;
+        continue;
       }
+      has_original_value = true;
       const auto& op_tree = op_original_value->tree();
       op_tree.ForEachElement([&](const ShapeIndex& index,
                                  const std::optional<OriginalArray>& value) {
@@ -233,7 +231,7 @@ std::shared_ptr<OriginalValue> OriginalValue::CreateFromInstruction(
         *original_value->mutable_tree()->mutable_element(dest_index) = value;
       });
     }
-    return original_value;
+    return has_original_value ? original_value : nullptr;
   }
 
   // Default case: create a new tree with leaves pointing to this instruction.
@@ -243,52 +241,6 @@ std::shared_ptr<OriginalValue> OriginalValue::CreateFromInstruction(
     leaf.second = {absl::StrCat(prefix, instruction->name()), leaf.first};
   }
   return original_value;
-}
-
-void CopyOriginalValue(const HloInstruction* src_instruction,
-                       HloInstruction* dest_instruction, bool clone) {
-  // This is not expected to happen in practice.
-  if (!src_instruction || !dest_instruction ||
-      !ShapeUtil::Compatible(src_instruction->shape(),
-                             dest_instruction->shape())) {
-    VLOG(1) << "Expect the new instruction to have the same shape with the old "
-               "instruction when moving over original_value";
-    return;
-  }
-
-  std::shared_ptr<OriginalValue> original_value =
-      src_instruction->original_value();
-  if (!original_value) {
-    return;
-  }
-
-  if (!clone || original_value->is_synthetic_call()) {
-    dest_instruction->set_original_value(original_value);
-    return;
-  }
-
-  // Deep clone the tree.
-  auto cloned_tree = std::make_shared<OriginalValue>(original_value->tree());
-  dest_instruction->set_original_value(cloned_tree);
-}
-
-void DeduplicateOriginalValues(HloModule* module) {
-  absl::flat_hash_set<std::shared_ptr<OriginalValue>,
-                      PointeeHash<OriginalValue>, PointeeEqual<OriginalValue>>
-      unique_original_values;
-  for (HloComputation* computation : module->computations()) {
-    for (HloInstruction* instruction : computation->instructions()) {
-      if (std::shared_ptr<OriginalValue> original_value =
-              instruction->original_value()) {
-        auto p = unique_original_values.insert(original_value);
-        if (!p.second) {
-          // Reassign the pointer with the existing identical object and release
-          // the duplicate.
-          instruction->set_original_value(*p.first);
-        }
-      }
-    }
-  }
 }
 
 /* static */
@@ -304,6 +256,26 @@ bool OriginalValue::IsCompatibleWith(const Shape& shape) const {
     return true;
   }
   return tree().IsStructurallyCompatible(shape);
+}
+
+std::optional<std::string> OriginalValue::GetOriginalCallLikeInstructions()
+    const {
+  if (is_synthetic_call()) {
+    // Synthetic call are transparent and hence resulting in empty call
+    // instructions.
+    return "";
+  }
+  if (IsEmpty()) {
+    // Currently we don't track original call information separately and rely
+    // on the first leaf to find the original call information. So if there are
+    // no leaves we return std::nullopt.
+    return std::nullopt;
+  }
+  auto original_array = original_arrays().begin()->second;
+  if (!original_array.has_value()) {
+    return std::nullopt;
+  }
+  return original_array->instruction_name;
 }
 
 }  // namespace xla

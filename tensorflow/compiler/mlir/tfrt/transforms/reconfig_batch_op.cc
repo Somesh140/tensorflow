@@ -50,6 +50,10 @@ class ReconfigBatchOpPass
     max_enqueued_batches_ = options.max_enqueued_batches;
     batch_queue_global_prioritization_num_threads_ =
         options.batch_queue_global_prioritization_num_threads;
+    enable_priority_aware_batch_scheduler_ =
+        options.enable_priority_aware_batch_scheduler;
+    enable_priority_aware_batch_scheduler_resplit_ =
+        options.enable_priority_aware_batch_scheduler_resplit;
   }
   ReconfigBatchOpPass()
       : mlir::PassWrapper<ReconfigBatchOpPass,
@@ -74,7 +78,9 @@ class ReconfigBatchOpPass
     if (min_num_batch_threads_ == 0 && min_max_enqueued_batches_ == 0 &&
         batch_padding_policy_.empty() && num_batch_threads_ == 0 &&
         max_batch_size_ == 0 && batch_timeout_micros_ == 0 &&
-        allowed_batch_sizes_.empty() && max_enqueued_batches_ == 0) {
+        allowed_batch_sizes_.empty() && max_enqueued_batches_ == 0 &&
+        !enable_priority_aware_batch_scheduler_ &&
+        !enable_priority_aware_batch_scheduler_resplit_) {
       return;
     }
     mlir::ModuleOp module = getOperation();
@@ -133,6 +139,12 @@ class ReconfigBatchOpPass
               batch_op.getMaxEnqueuedBatches());
         }
       }
+      if (enable_priority_aware_batch_scheduler_) {
+        batch_op.setEnablePriorityAwareBatchScheduler(true);
+      }
+      if (enable_priority_aware_batch_scheduler_resplit_) {
+        batch_op.setEnablePriorityAwareBatchSchedulerResplit(true);
+      }
     });
   }
 
@@ -171,6 +183,16 @@ class ReconfigBatchOpPass
       llvm::cl::desc("If non-zero, all models on this server are switched to "
                      "use a prioritized batching function using this number of "
                      "global threads.")};
+  mlir::Pass::Option<bool> enable_priority_aware_batch_scheduler_{
+      *this, "tfrt-enable-priority-aware-batch-scheduler",
+      llvm::cl::init(false),
+      llvm::cl::desc("If true, the queue implementation will have a separate "
+                     "subqueue for each criticality.")};
+  mlir::Pass::Option<bool> enable_priority_aware_batch_scheduler_resplit_{
+      *this, "tfrt-enable-priority-aware-batch-scheduler-resplit",
+      llvm::cl::init(false),
+      llvm::cl::desc("If true, the queue implementation will allow task "
+                     "resplit for priority aware batch scheduler.")};
 };
 
 }  // namespace

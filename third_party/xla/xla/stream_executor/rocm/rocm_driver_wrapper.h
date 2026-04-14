@@ -49,8 +49,8 @@ namespace wrap {
   auto hipSymbolName(Args... args) -> decltype(::hipSymbolName(args...)) {  \
     using FuncPtrT = std::add_pointer<decltype(::hipSymbolName)>::type;     \
     static FuncPtrT loaded = []() -> FuncPtrT {                             \
-      static const char *kName = TO_STR(hipSymbolName);                     \
-      void *f;                                                              \
+      static const char* kName = TO_STR(hipSymbolName);                     \
+      void* f;                                                              \
       auto s = tsl::Env::Default()->GetSymbolFromLibrary(                   \
           tsl::internal::CachedDsoLoader::GetHipDsoHandle().value(), kName, \
           &f);                                                              \
@@ -66,8 +66,6 @@ namespace wrap {
 // IMPORTANT: if you add a new HIP API to this list, please notify
 // the rocm-profiler developers to track the API traces.
 #define HIP_ROUTINE_EACH(__macro)                   \
-  __macro(hipCtxGetDevice)                          \
-  __macro(hipCtxSetCurrent)                         \
   __macro(hipCtxEnablePeerAccess)                   \
   __macro(hipDeviceCanAccessPeer)                   \
   __macro(hipDeviceEnablePeerAccess)                \
@@ -78,10 +76,6 @@ namespace wrap {
   __macro(hipDeviceGetSharedMemConfig)              \
   __macro(hipDeviceGetStreamPriorityRange)          \
   __macro(hipDeviceGraphMemTrim)                    \
-  __macro(hipDevicePrimaryCtxGetState)              \
-  __macro(hipDevicePrimaryCtxSetFlags)              \
-  __macro(hipDevicePrimaryCtxRetain)                \
-  __macro(hipDevicePrimaryCtxRelease)               \
   __macro(hipDeviceSetSharedMemConfig)              \
   __macro(hipDeviceSynchronize)                     \
   __macro(hipDeviceTotalMem)                        \
@@ -100,6 +94,7 @@ namespace wrap {
   __macro(hipGetDeviceCount)                        \
   __macro(hipGetDeviceProperties)                   \
   __macro(hipGetErrorString)                        \
+  __macro(hipGetLastError)                          \
   __macro(hipGraphAddKernelNode)                    \
   __macro(hipGraphAddChildGraphNode)                \
   __macro(hipGraphAddEmptyNode)                     \
@@ -111,6 +106,7 @@ namespace wrap {
   __macro(hipGraphDebugDotPrint)                    \
   __macro(hipGraphDestroy)                          \
   __macro(hipGraphGetNodes)                         \
+  __macro(hipGraphGetRootNodes)                     \
   __macro(hipGraphExecChildGraphNodeSetParams)      \
   __macro(hipGraphExecDestroy)                      \
   __macro(hipGraphExecKernelNodeSetParams)          \
@@ -132,6 +128,7 @@ namespace wrap {
   __macro(hipLaunchKernel)                          \
   __macro(hipMalloc)                                \
   __macro(hipMallocManaged)                         \
+  __macro(hipExtMallocWithFlags)                    \
   __macro(hipMemGetAddressRange)                    \
   __macro(hipMemGetInfo)                            \
   __macro(hipMemcpyDtoD)                            \

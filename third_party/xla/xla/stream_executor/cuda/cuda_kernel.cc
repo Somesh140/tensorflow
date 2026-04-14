@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/stream_executor/cuda/cuda_kernel.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -26,14 +27,22 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/synchronization/mutex.h"
 #include "third_party/gpus/cuda/include/cuda.h"
 #include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/cuda/cuda_status.h"
 #include "xla/stream_executor/kernel.h"
+#include "xla/stream_executor/kernel_metadata.h"
 #include "xla/stream_executor/launch_dim.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
+#include "tsl/profiler/lib/traceme.h"
+#include "tsl/profiler/lib/traceme_encode.h"
+
+using tsl::profiler::TraceMe;
+using tsl::profiler::TraceMeEncode;
+using tsl::profiler::TraceMeLevel;
 
 namespace stream_executor {
 namespace gpu {
@@ -45,6 +54,13 @@ absl::Status GetCudaAttribute(CUfunction_attribute attribute, CUfunction func,
   return cuda::ToStatus(
       cuFuncGetAttribute(attribute_value, attribute, func),
       absl::StrCat("Failed to query kernel attribute: ", attribute));
+}
+
+absl::Status SetCudaAttribute(CUfunction_attribute attribute, CUfunction func,
+                              int value) {
+  return cuda::ToStatus(
+      cuFuncSetAttribute(func, attribute, value),
+      absl::StrCat("Failed to set kernel attribute: ", attribute));
 }
 
 }  // namespace
@@ -80,15 +96,46 @@ absl::StatusOr<KernelMetadata> CudaKernel::GetKernelMetadata() {
   return kernel_metadata;
 }
 
+absl::Status CudaKernel::UpdateMaxDynamicSharedMemoryBytes(
+    int32_t shared_memory_bytes) const {
+  if (shared_memory_bytes <=
+      max_dynamic_shared_memory_bytes_.load(std::memory_order_relaxed)) {
+    return absl::OkStatus();
+  }
+
+  absl::MutexLock lock(&mu_);
+  if (shared_memory_bytes <=
+      max_dynamic_shared_memory_bytes_.load(std::memory_order_relaxed)) {
+    return absl::OkStatus();
+  }
+
+  std::unique_ptr<ActivateContext> activation = executor_->Activate();
+  TF_RETURN_IF_ERROR(
+      SetCudaAttribute(CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                       gpu_function_, shared_memory_bytes));
+  TF_RETURN_IF_ERROR(cuda::ToStatus(
+      cuFuncSetCacheConfig(gpu_function_, CU_FUNC_CACHE_PREFER_SHARED)));
+
+  max_dynamic_shared_memory_bytes_.store(shared_memory_bytes,
+                                         std::memory_order_relaxed);
+  return absl::OkStatus();
+}
+
 absl::Status CudaKernel::Launch(const ThreadDim& thread_dims,
                                 const BlockDim& block_dims,
                                 const std::optional<ClusterDim>& cluster_dims,
                                 Stream* stream, const KernelArgs& args) {
+  TraceMe trace([] { return TraceMeEncode("CudaKernel::Launch", {}); },
+                /*level=*/TraceMeLevel::kVerbose);
+
   CUfunction function = gpu_function();
 
   // Launch kernels with packed arguments.
   auto launch = [this, stream, &cluster_dims, &thread_dims, &block_dims,
                  function](const KernelArgsPackedArrayBase& packed) {
+    TraceMe trace([] { return TraceMeEncode("CudaKernel::Launch/launch", {}); },
+                  /*level=*/TraceMeLevel::kVerbose);
+
     int32_t expected_number_of_arguments =
         Arity() + (packed.number_of_shared_bytes() > 0);
 
@@ -100,9 +147,12 @@ absl::Status CudaKernel::Launch(const ThreadDim& thread_dims,
 
     void** params = const_cast<void**>(packed.argument_addresses().data());
 
+    TF_RETURN_IF_ERROR(
+        UpdateMaxDynamicSharedMemoryBytes(packed.number_of_shared_bytes()));
+
     return stream->LaunchKernel(thread_dims, block_dims, cluster_dims, function,
-                                name(), params,
-                                packed.number_of_shared_bytes());
+                                name(), params, packed.number_of_shared_bytes(),
+                                use_pdl());
   };
 
   // If arguments are already packed we can just launch the kernel.
@@ -111,7 +161,7 @@ absl::Status CudaKernel::Launch(const ThreadDim& thread_dims,
   }
 
   // For device memory array we rely on a custom kernel arguments packing.
-  if (auto* device_mem = DynCast<KernelArgsDeviceMemoryArray>(&args)) {
+  if (auto* device_mem = DynCast<KernelArgsDeviceAddressArray>(&args)) {
     auto& pack = args_packing();
     if (!pack) {
       return absl::InternalError(

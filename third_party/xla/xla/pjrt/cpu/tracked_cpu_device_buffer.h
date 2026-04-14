@@ -26,10 +26,10 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
+#include "xla/future.h"
 #include "xla/pjrt/abstract_tracked_device_buffer.h"
 #include "xla/pjrt/cpu/cpu_event.h"
 #include "xla/pjrt/device_event.h"
-#include "xla/pjrt/pjrt_future.h"
 #include "xla/pjrt/raw_buffer.h"
 #include "xla/tsl/concurrency/async_value.h"
 #include "xla/tsl/concurrency/async_value_ref.h"
@@ -140,35 +140,8 @@ class CpuDeviceMemory {
 // memory. This class is thread-compatible.
 class TrackedCpuDeviceBuffer : public AbstractTrackedDeviceBuffer {
  public:
-  // For non-tuple, takes a single buffer.
-  // For tuple, takes the leaf buffers. Tuple index table created internally.
-  // Nested tuple is not supported.
-
-  // Constructor for allocated cpu memory, i.e., `buffer` should have concrete
-  // states. Definition event is after the list of `definition_events`.
-  TrackedCpuDeviceBuffer(
-      bool owns_buffers, tsl::AsyncValueRef<CpuDeviceMemory> buffer,
-      absl::InlinedVector<tsl::AsyncValueRef<CpuEvent>, 4> definition_events);
-
   // Variant with single definition event.
-  TrackedCpuDeviceBuffer(bool owns_buffers,
-                         tsl::AsyncValueRef<CpuDeviceMemory> buffer,
-                         tsl::AsyncValueRef<CpuEvent> definition_event);
-
-  // Constructor for unallocated cpu memory, i.e., `buffer` will have
-  // unconstructed states, and we also need to provide `buffer_size` which will
-  // be the size of the `buffer` after allocation. Definition event is after the
-  // list of `definition_events`. Callers need to ensure cpu memory is allocated
-  // before the definition event is ready.
-  TrackedCpuDeviceBuffer(
-      bool owns_buffers, tsl::AsyncValueRef<CpuDeviceMemory> buffer,
-      size_t buffer_size,
-      absl::InlinedVector<tsl::AsyncValueRef<CpuEvent>, 4> definition_events);
-
-  // Variant with single definition event.
-  TrackedCpuDeviceBuffer(bool owns_buffers,
-                         tsl::AsyncValueRef<CpuDeviceMemory> buffer,
-                         size_t buffer_size,
+  TrackedCpuDeviceBuffer(tsl::RCReference<CommonPjRtRawBuffer> raw_buffer,
                          tsl::AsyncValueRef<CpuEvent> definition_event);
 
   TrackedCpuDeviceBuffer(TrackedCpuDeviceBuffer&&) noexcept = default;
@@ -177,16 +150,12 @@ class TrackedCpuDeviceBuffer : public AbstractTrackedDeviceBuffer {
 
   ~TrackedCpuDeviceBuffer();
 
-  const tsl::AsyncValueRef<CpuDeviceMemory>& buffer() { return buffer_; }
+  const tsl::AsyncValueRef<CpuDeviceMemory>& buffer();
 
   size_t BufferSize();
 
   const tsl::AsyncValueRef<CpuEvent>& definition_event() const {
     return definition_event_;
-  }
-
-  absl::Span<const tsl::AsyncValueRef<CpuEvent>> UsageEvents() const {
-    return usage_events_;
   }
 
   void AddUsageEvents(absl::Span<tsl::AsyncValueRef<CpuEvent>> events);
@@ -196,37 +165,31 @@ class TrackedCpuDeviceBuffer : public AbstractTrackedDeviceBuffer {
   absl::InlinedVector<tsl::AsyncValueRef<CpuEvent>, 4>
   LockUseAndTransferUsageEvents();
 
-  bool owns_buffers() const { return owns_buffers_; }
-
   std::vector<tsl::RCReference<tsl::AsyncValue>> GetAsyncValueDefinitionEvents()
       override;
 
-  tsl::RCReference<CommonPjRtRawBuffer> GetRawBuffer(
+  std::vector<tsl::RCReference<tsl::AsyncValue>>
+  GetAsyncValueDefinitionAndUsageEvents() override;
+
+  absl::StatusOr<PjRtDeviceEventRef> GetDefinitionEvent(
       PjRtMemorySpace* memory_space) override;
 
-  void AddUsageEvent(tsl::RCReference<PjRtDeviceEvent> event) override;
+  void AddUsageEvent(PjRtDeviceEventRef event) override;
 
   void Delete(PjRtMemorySpace* memory_space) override;
 
-  PjRtFuture<> GetReadyFuture(PjRtMemorySpace* memory_space) override;
+  Future<> GetReadyFuture(PjRtMemorySpace* memory_space) override;
 
   absl::Status BlockForOperationsToComplete(
       PjRtMemorySpace* memory_space) override;
 
+  bool AddDefinitionEventsToSet(PjRtDeviceEventSet& events) override;
+
+  void AddUsageEventsToSet(PjRtDeviceEventSet& events) override;
+
  private:
-  // Relinquishes ownership of the buffer's device memory, e.g., after the
-  // buffer is passed to a computation that aliases its inputs to outputs.
-  void ReleaseDeviceMemory();
+  void ConfirmDonation() override;
 
-  void ConfirmDonation() override { ReleaseDeviceMemory(); }
-
-  bool owns_buffers_;
-
-  // If non-tuple, `buffers_` contains 1 buffer; otherwise all leaf buffers.
-  tsl::AsyncValueRef<CpuDeviceMemory> buffer_;
-  // Should correspond to size of each buffer in `buffers_` when `buffers_` is
-  // available.
-  size_t buffer_size_;
   // The definition event are associated with CPU operations that write to the
   // buffers.
   tsl::AsyncValueRef<CpuEvent> definition_event_;

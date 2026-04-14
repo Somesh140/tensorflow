@@ -50,8 +50,9 @@ constexpr char kBatchesToAverageOverAttr[] = "_batches_to_average_over";
 
 }  // namespace
 
-int32 BatchFunctionFallbackKernelBase::
-    NumBatchThreadsFromEnvironmentWithDefault(int default_num_batch_threads) {
+int32_t
+BatchFunctionFallbackKernelBase::NumBatchThreadsFromEnvironmentWithDefault(
+    int default_num_batch_threads) {
   int32_t num;
   const char* val = std::getenv("TF_NUM_BATCH_THREADS");
 
@@ -129,6 +130,22 @@ BatchFunctionFallbackKernelBase::BatchFunctionFallbackKernelBase(
     OP_REQUIRES_OK(c, c->GetAttr("disable_padding", &disable_padding_));
   } else {
     disable_padding_ = false;
+  }
+
+  if (c->HasAttr("enable_priority_aware_batch_scheduler")) {
+    OP_REQUIRES_OK(c, c->GetAttr("enable_priority_aware_batch_scheduler",
+                                 &enable_priority_aware_batch_scheduler_));
+  }
+
+  if (c->HasAttr("enable_priority_aware_batch_scheduler_resplit")) {
+    OP_REQUIRES_OK(c,
+                   c->GetAttr("enable_priority_aware_batch_scheduler_resplit",
+                              &enable_priority_aware_batch_scheduler_resplit_));
+  }
+
+  if (c->HasAttr("num_warmup_batch_threads")) {
+    OP_REQUIRES_OK(
+        c, c->GetAttr("num_warmup_batch_threads", &num_warmup_batch_threads_));
   }
 
   // Helper function `SetAdaptiveBatchSchedulerOptions` calls

@@ -33,6 +33,12 @@ namespace ifrt_serving {
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
 CreateRewriteClusterToIfrtCallPass();
 
+// Creates a pass that propagates static shapes from
+// `tf.SetStaticDimensionBoundsOp` to `IfrtCallOp` and callee `FuncOp`
+// arguments.
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
+CreatePropagateStaticShapesPass();
+
 // Creates a pass that sinks variable tensor argument to `tf.IfrtCall` as named
 // arrays and lowers `tf.ReadVariableOp` to `tf.IfrtLoadVariableOp`.
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
@@ -78,7 +84,8 @@ void EnablePassIRPrinting(mlir::PassManager& pm,
 // Convert tf_device.cluster_func to tf.ifrt_program_call.
 // The callee function is converted to a ifrt_program.
 absl::Status RunClusterToIfrtRuntimeOpsPassPipeline(
-    mlir::ModuleOp module, llvm::StringRef module_name = llvm::StringRef());
+    mlir::ModuleOp module, llvm::StringRef module_name = llvm::StringRef(),
+    bool enable_propagate_static_shapes_pass = true);
 
 }  // namespace ifrt_serving
 }  // namespace tensorflow

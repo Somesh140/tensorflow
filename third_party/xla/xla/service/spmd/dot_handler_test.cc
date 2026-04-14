@@ -18,7 +18,9 @@ limitations under the License.
 #include <optional>
 #include <utility>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_computation.h"
@@ -34,6 +36,7 @@ limitations under the License.
 #include "xla/service/spmd/stateful_rng_spmd_partitioner.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -42,7 +45,8 @@ namespace {
 
 namespace op = xla::testing::opcode_matchers;
 
-class DotHandlerTest : public HloHardwareIndependentTestBase {
+class DotHandlerTest : public HloHardwareIndependentTestBase,
+                       public ::testing::WithParamInterface<bool> {
  public:
   absl::StatusOr<std::unique_ptr<HloModule>> PartitionComputation(
       absl::string_view hlo_module, int64_t num_partitions,
@@ -55,6 +59,7 @@ class DotHandlerTest : public HloHardwareIndependentTestBase {
     debug_options.set_xla_gpu_threshold_for_windowed_einsum_mib(
         threshold_for_windowed_einsum_mib);
     debug_options.set_xla_gpu_multi_streamed_windowed_einsum(true);
+    debug_options.set_xla_enable_hlo_sharding_v3(GetParam());
     config.set_debug_options(debug_options);
 
     TF_ASSIGN_OR_RETURN(auto module,
@@ -93,7 +98,7 @@ class DotHandlerTest : public HloHardwareIndependentTestBase {
   }
 };
 
-TEST_F(DotHandlerTest, VerifyDefaultMaxWindowedEinsumIterationInPartitioner) {
+TEST_P(DotHandlerTest, VerifyDefaultMaxWindowedEinsumIterationInPartitioner) {
   // Verify that StatefulRngSpmdPartitioner correctly sets the default
   // max_windowed_einsum_iteration when not explicitly provided
 
@@ -126,7 +131,7 @@ TEST_F(DotHandlerTest, VerifyDefaultMaxWindowedEinsumIterationInPartitioner) {
       << "Custom max_windowed_einsum_iteration should be respected";
 }
 
-TEST_F(DotHandlerTest, MaxWindowedEinsumIterationWithContractingDims) {
+TEST_P(DotHandlerTest, MaxWindowedEinsumIterationWithContractingDims) {
   // Test with contracting dimension sharding pattern
   // This pattern should trigger reduce-scatter windowed einsum
   absl::string_view hlo_string = R"(
@@ -135,8 +140,8 @@ HloModule test
 ENTRY main {
   Arg_0 = bf16[2048,24576]{1,0} parameter(0), sharding={devices=[1,4]<=[4]}
   Arg_1 = bf16[24576,98304]{1,0} parameter(1), sharding={devices=[4,1]<=[4]}
-  ROOT dot = bf16[2048,98304]{1,0} dot(Arg_0, Arg_1), 
-    lhs_contracting_dims={1}, rhs_contracting_dims={0}, 
+  ROOT dot = bf16[2048,98304]{1,0} dot(Arg_0, Arg_1),
+    lhs_contracting_dims={1}, rhs_contracting_dims={0},
     sharding={devices=[1,4]<=[4]}
 }
 )";
@@ -172,7 +177,7 @@ ENTRY main {
   }
 }
 
-TEST_F(DotHandlerTest, MaxWindowedEinsumIterationBatchDims) {
+TEST_P(DotHandlerTest, MaxWindowedEinsumIterationBatchDims) {
   // Test with batch dimension sharding
   absl::string_view hlo_string = R"(
 HloModule test
@@ -180,9 +185,9 @@ HloModule test
 ENTRY main {
   Arg_0 = bf16[8,2048,256]{2,1,0} parameter(0), sharding={devices=[4,1,1]<=[4]}
   Arg_1 = bf16[8,256,512]{2,1,0} parameter(1), sharding={devices=[4,1,1]<=[4]}
-  ROOT dot = bf16[8,2048,512]{2,1,0} dot(Arg_0, Arg_1), 
+  ROOT dot = bf16[8,2048,512]{2,1,0} dot(Arg_0, Arg_1),
     lhs_batch_dims={0}, rhs_batch_dims={0},
-    lhs_contracting_dims={2}, rhs_contracting_dims={1}, 
+    lhs_contracting_dims={2}, rhs_contracting_dims={1},
     sharding={devices=[4,1,1]<=[4]}
 }
 )";
@@ -203,7 +208,7 @@ ENTRY main {
   }
 }
 
-TEST_F(DotHandlerTest, DefaultMaxWindowedEinsumIterationWithReduceScatter) {
+TEST_P(DotHandlerTest, DefaultMaxWindowedEinsumIterationWithReduceScatter) {
   // Test that the default max_windowed_einsum_iteration (32) works correctly
   // for reduce-scatter pattern
 
@@ -215,8 +220,8 @@ HloModule test
 ENTRY main {
   Arg_0 = bf16[128,256]{1,0} parameter(0), sharding={devices=[1,16]<=[16]}
   Arg_1 = bf16[256,512]{1,0} parameter(1), sharding={devices=[16,1]<=[16]}
-  ROOT dot = bf16[128,512]{1,0} dot(Arg_0, Arg_1), 
-    lhs_contracting_dims={1}, rhs_contracting_dims={0}, 
+  ROOT dot = bf16[128,512]{1,0} dot(Arg_0, Arg_1),
+    lhs_contracting_dims={1}, rhs_contracting_dims={0},
     sharding={devices=[1,16]<=[16]}
 }
 )";
@@ -240,8 +245,8 @@ HloModule test
 ENTRY main {
   Arg_0 = bf16[128,256]{1,0} parameter(0), sharding={devices=[1,32]<=[32]}
   Arg_1 = bf16[256,512]{1,0} parameter(1), sharding={devices=[32,1]<=[32]}
-  ROOT dot = bf16[128,512]{1,0} dot(Arg_0, Arg_1), 
-    lhs_contracting_dims={1}, rhs_contracting_dims={0}, 
+  ROOT dot = bf16[128,512]{1,0} dot(Arg_0, Arg_1),
+    lhs_contracting_dims={1}, rhs_contracting_dims={0},
     sharding={devices=[1,32]<=[32]}
 }
 )";
@@ -266,8 +271,8 @@ HloModule test
 ENTRY main {
   Arg_0 = bf16[128,256]{1,0} parameter(0), sharding={devices=[1,64]<=[64]}
   Arg_1 = bf16[256,512]{1,0} parameter(1), sharding={devices=[64,1]<=[64]}
-  ROOT dot = bf16[128,512]{1,0} dot(Arg_0, Arg_1), 
-    lhs_contracting_dims={1}, rhs_contracting_dims={0}, 
+  ROOT dot = bf16[128,512]{1,0} dot(Arg_0, Arg_1),
+    lhs_contracting_dims={1}, rhs_contracting_dims={0},
     sharding={devices=[1,64]<=[64]}
 }
 )";
@@ -285,7 +290,7 @@ ENTRY main {
   }
 }
 
-TEST_F(DotHandlerTest, MaxWindowedEinsumIterationEdgeCases) {
+TEST_P(DotHandlerTest, MaxWindowedEinsumIterationEdgeCases) {
   // Test edge cases for max_windowed_einsum_iteration
   absl::string_view hlo_string = R"(
 HloModule test
@@ -293,8 +298,8 @@ HloModule test
 ENTRY main {
   Arg_0 = bf16[128,256]{1,0} parameter(0), sharding={devices=[1,8]<=[8]}
   Arg_1 = bf16[256,512]{1,0} parameter(1), sharding={devices=[8,1]<=[8]}
-  ROOT dot = bf16[128,512]{1,0} dot(Arg_0, Arg_1), 
-    lhs_contracting_dims={1}, rhs_contracting_dims={0}, 
+  ROOT dot = bf16[128,512]{1,0} dot(Arg_0, Arg_1),
+    lhs_contracting_dims={1}, rhs_contracting_dims={0},
     sharding={devices=[1,8]<=[8]}
 }
 )";
@@ -342,7 +347,7 @@ ENTRY main {
   }
 }
 
-TEST_F(DotHandlerTest, MXCustomCall_BatchAndBatch) {
+TEST_P(DotHandlerTest, MXCustomCall_BatchAndBatch) {
   absl::string_view hlo_string = R"(
 HloModule module
 
@@ -362,7 +367,7 @@ ENTRY entry {
                   op::Reshape(op::CustomCall({"__op$block_scaled_dot"}))))));
 }
 
-TEST_F(DotHandlerTest, MXCustomCall_BatchAndNonContracting) {
+TEST_P(DotHandlerTest, MXCustomCall_BatchAndNonContracting) {
   absl::string_view hlo_string = R"(
 HloModule module
 
@@ -384,7 +389,7 @@ ENTRY entry {
                              op::Reshape(op::Transpose(op::AllToAll()))));
 }
 
-TEST_F(DotHandlerTest, MXCustomCall_ContractingAndContracting) {
+TEST_P(DotHandlerTest, MXCustomCall_ContractingAndContracting) {
   absl::string_view hlo_string = R"(
 HloModule module
 
@@ -409,7 +414,7 @@ ENTRY entry {
           op::Constant(LiteralUtil::CreateR0<int>(0))));
 }
 
-TEST_F(DotHandlerTest, MXCustomCall_NonContractingAndContracting) {
+TEST_P(DotHandlerTest, MXCustomCall_NonContractingAndContracting) {
   absl::string_view hlo_string = R"(
 HloModule module
 
@@ -430,7 +435,7 @@ ENTRY entry {
                      op::AllGather(), op::Parameter(1), op::AllGather()));
 }
 
-TEST_F(DotHandlerTest, MXCustomCall_ContractingAndReplicated) {
+TEST_P(DotHandlerTest, MXCustomCall_ContractingAndReplicated) {
   absl::string_view hlo_string = R"(
 HloModule module
 
@@ -449,7 +454,7 @@ ENTRY entry {
               op::AllReduce(op::CustomCall({"__op$block_scaled_dot"})));
 }
 
-TEST_F(DotHandlerTest, MXCustomCall_BatchNonContractingAndBatchNonContracting) {
+TEST_P(DotHandlerTest, MXCustomCall_BatchNonContractingAndBatchNonContracting) {
   absl::string_view hlo_string = R"(
 HloModule module
 
@@ -468,7 +473,7 @@ ENTRY entry {
               op::CollectivePermute(op::CustomCall({"__op$block_scaled_dot"})));
 }
 
-TEST_F(DotHandlerTest,
+TEST_P(DotHandlerTest,
        MXCustomCall_ContractingNonContractingAndContractingNonContracting0) {
   absl::string_view hlo_string = R"(
 HloModule module
@@ -490,7 +495,7 @@ ENTRY entry {
                      op::AllGather(), op::AllGather(), op::AllGather()));
 }
 
-TEST_F(DotHandlerTest,
+TEST_P(DotHandlerTest,
        MXCustomCall_ContractingNonContractingAndContractingNonContracting1) {
   absl::string_view hlo_string = R"(
 HloModule module
@@ -510,7 +515,7 @@ ENTRY entry {
               op::AllReduce(op::CustomCall({"__op$block_scaled_dot"})));
 }
 
-TEST_F(DotHandlerTest, MXCustomCall_ReplicatedAndReplicated0) {
+TEST_P(DotHandlerTest, MXCustomCall_ReplicatedAndReplicated0) {
   absl::string_view hlo_string = R"(
 HloModule module
 
@@ -531,7 +536,7 @@ ENTRY entry {
                      op::Parameter(2), op::DynamicSlice(), op::Parameter(3)));
 }
 
-TEST_F(DotHandlerTest, MXCustomCall_ReplicatedAndReplicated1) {
+TEST_P(DotHandlerTest, MXCustomCall_ReplicatedAndReplicated1) {
   absl::string_view hlo_string = R"(
 HloModule module
 
@@ -551,6 +556,9 @@ ENTRY entry {
       op::CustomCall({"__op$block_scaled_dot"}, op::DynamicSlice(),
                      op::Parameter(2), op::DynamicSlice(), op::Parameter(3)));
 }
+
+INSTANTIATE_TEST_SUITE_P(DotHandlerTestInstantiation, DotHandlerTest,
+                         ::testing::Bool());
 
 }  // namespace
 }  // namespace spmd

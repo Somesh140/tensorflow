@@ -36,16 +36,15 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
-#include "xla/pjrt/pjrt_future.h"
 #include "xla/python/transfer/transfer_socket.pb.h"
+#include "xla/tsl/concurrency/future.h"
 #include "xla/tsl/concurrency/ref_count.h"
 
 namespace aux {
 
 class StringFutureChunkDestination : public aux::ChunkDestination {
  public:
-  explicit StringFutureChunkDestination(
-      xla::PjRtFuture<std::string>::Promise dest)
+  explicit StringFutureChunkDestination(tsl::Promise<std::string> dest)
       : dest_(std::move(dest)) {}
   ~StringFutureChunkDestination() override { dest_.Set(ConsumeFinalResult()); }
   absl::Status Put(const void* data, int64_t offset, size_t size,
@@ -78,12 +77,12 @@ class StringFutureChunkDestination : public aux::ChunkDestination {
  private:
   absl::Mutex mu_;
   std::vector<std::pair<size_t, std::string>> chunks_;
-  xla::PjRtFuture<std::string>::Promise dest_;
+  tsl::Promise<std::string> dest_;
 };
 
-std::pair<xla::PjRtFuture<std::string>, tsl::RCReference<ChunkDestination>>
+std::pair<tsl::Future<std::string>, tsl::RCReference<ChunkDestination>>
 ChunkDestination::MakeStringDest() {
-  auto [promise, result] = xla::PjRtFuture<std::string>::MakePromise();
+  auto [promise, result] = tsl::MakePromise<std::string>();
   return std::make_pair(
       std::move(result),
       tsl::MakeRef<StringFutureChunkDestination>(std::move(promise)));
@@ -152,7 +151,10 @@ BulkTransportInterface::SendMessage BulkTransportInterface::MakeMessage(
   SendMessage result;
   result.data = tmp->data();
   result.size = tmp->size();
-  result.on_send = std::move(on_send);
+  result.on_send = [on_send = std::move(on_send)](absl::StatusOr<int> bond_id,
+                                                  size_t size) mutable {
+    std::move(on_send)(bond_id.value(), size);
+  };
   result.on_done = [tmp = std::move(tmp)]() {};
   return result;
 }
@@ -320,7 +322,28 @@ void PullTable::Handle(tsl::RCReference<ConnectionState> state,
   if (entry->Handle(std::move(state), req, base_req_id)) {
     absl::MutexLock l(mu_);
     auto it = entries_.find(req.uuid());
-    entries_.erase(it);
+    if (it != entries_.end()) {
+      entries_.erase(it);
+    }
+  }
+}
+
+void PullTable::Reset() {
+  mu_.lock();
+  auto entries = std::move(entries_);
+  auto paused_fetches_by_uuid = std::move(paused_fetches_);
+  mu_.unlock();
+  // Drop entries without the lock held.
+  for (const auto& paused_fetches : paused_fetches_by_uuid) {
+    for (const auto& paused_fetch : paused_fetches.second) {
+      size_t req_id = paused_fetch.base_req_id;
+      for (uint64_t bid : paused_fetch.req.buffer_ids()) {
+        (void)bid;
+        paused_fetch.state->SendError(req_id, 0, 0, true,
+                                      absl::InternalError("PullTable::Reset"));
+        ++req_id;
+      }
+    }
   }
 }
 

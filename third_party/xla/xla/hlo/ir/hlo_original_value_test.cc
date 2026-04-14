@@ -24,6 +24,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/hash/hash_testing.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_original_value_util.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/shape_util.h"
 #include "xla/tsl/platform/statusor.h"
@@ -128,6 +129,13 @@ TEST(OriginalValueTest, ProtoSerde) {
       OriginalValue::FromProto(proto_synthetic);
   EXPECT_TRUE(value_synthetic_from_proto->is_synthetic_call());
   EXPECT_EQ(*value_synthetic_from_proto, value_synthetic);
+
+  // Test with empty tuple.
+  OriginalValue value_empty = OriginalValue(Node::Tuple());
+  OriginalValueProto proto_empty = value_empty.ToProto();
+  std::shared_ptr<OriginalValue> value_empty_from_proto =
+      OriginalValue::FromProto(proto_empty);
+  EXPECT_EQ(*value_empty_from_proto, value_empty);
 }
 
 TEST(OriginalValueTest, ElementAccess) {
@@ -291,7 +299,7 @@ ENTRY main {
   EXPECT_EQ(p0->original_value()->ToString(), "({\"p0\" {0}}, {\"p0\" {1}})");
 }
 
-TEST_F(OriginalValueHloTest, CreateFromInstructionTupleWithSynthetic) {
+TEST_F(OriginalValueHloTest, CreateFromInstructionTupleWithSyntheticElement) {
   const char* hlo_string = R"(
 HloModule test
 
@@ -312,7 +320,8 @@ ENTRY main {
       std::make_shared<OriginalValue>(OriginalValue::SyntheticCall()));
   tuple->set_original_value(OriginalValue::CreateFromInstruction(tuple));
 
-  EXPECT_EQ(tuple->original_value(), nullptr);
+  ASSERT_NE(tuple->original_value(), nullptr);
+  EXPECT_EQ(tuple->original_value()->ToString(), "({\"p0\"}, {})");
 }
 
 TEST_F(OriginalValueHloTest, CopyOriginalValue) {
@@ -330,10 +339,10 @@ ENTRY main {
 
   std::unique_ptr<HloInstruction> clone = p0->Clone();
 
-  CopyOriginalValue(p0, clone.get(), /*clone=*/false);
+  CopyOriginalValue(p0, clone.get(), /*clone=*/false, /*issue_warning=*/false);
   EXPECT_EQ(p0->original_value(), clone->original_value());
 
-  CopyOriginalValue(p0, clone.get(), /*clone=*/true);
+  CopyOriginalValue(p0, clone.get(), /*clone=*/true, /*issue_warning=*/false);
   EXPECT_NE(p0->original_value(), clone->original_value());
   EXPECT_EQ(*p0->original_value(), *clone->original_value());
 }
@@ -354,10 +363,10 @@ ENTRY main {
 
   std::unique_ptr<HloInstruction> clone = p0->Clone();
 
-  CopyOriginalValue(p0, clone.get(), /*clone=*/false);
+  CopyOriginalValue(p0, clone.get(), /*clone=*/false, /*issue_warning=*/false);
   EXPECT_EQ(p0->original_value(), clone->original_value());
 
-  CopyOriginalValue(p0, clone.get(), /*clone=*/true);
+  CopyOriginalValue(p0, clone.get(), /*clone=*/true, /*issue_warning=*/false);
   EXPECT_EQ(p0->original_value(), clone->original_value());
 }
 
@@ -432,6 +441,25 @@ ENTRY main {
   DeduplicateOriginalValues(module.get());
 
   EXPECT_EQ(p0->original_value(), p1->original_value());
+}
+
+TEST_F(OriginalValueHloTest, InferGetTupleElementOriginalValue) {
+  const char* hlo_string = R"(
+HloModule test
+
+ENTRY main {
+  p0 = f32[] parameter(0), origin={{"p0"}}
+  p1 = f32[] parameter(1)
+  tuple = (f32[], f32[]) tuple(p0, p1)
+  ROOT gte = f32[] get-tuple-element(tuple), index=0
+}
+)";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(hlo_string));
+  const HloInstruction* gte = module->entry_computation()->root_instruction();
+
+  EXPECT_NE(gte->original_value(), nullptr);
+  EXPECT_EQ(gte->original_value()->ToString(), R"({"p0"})");
 }
 
 }  // namespace

@@ -17,7 +17,6 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -702,7 +701,7 @@ Status MlirFunctionContext::Finalize(OutputList* outputs,
           "Capturing tensors from other context is not supported.");
     ret_operands.push_back(operand->getValue());
   }
-  builder_.create<func::ReturnOp>(func_.getLoc(), ret_operands);
+  func::ReturnOp::create(builder_, func_.getLoc(), ret_operands);
 
   auto arg_types = body.getArgumentTypes();
   auto result_types = body.getTerminator()->getOperandTypes();

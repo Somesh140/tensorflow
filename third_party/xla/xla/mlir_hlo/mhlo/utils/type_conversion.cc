@@ -81,26 +81,6 @@ Value materializeCastToIllegal(OpBuilder& builder, Type type,
       ->getResult(0);
 }
 
-Value scalarToTensor(OpBuilder& builder, Type type,
-                                    ValueRange inputs, Location loc) {
-  assert(inputs.size() == 1);
-  if (mlir::isa<ShapedType>(inputs.front().getType())) {
-    return Value();
-  }
-  Value result =
-      tensor::FromElementsOp::create(
-          builder, loc, RankedTensorType::get({}, inputs.front().getType()),
-          inputs.front())
-          .getResult();
-  // Convert to a signed integer if necessary.
-  Type elementType = mlir::getElementTypeOrSelf(type);
-  if (elementType.isInteger() && !elementType.isSignlessInteger()) {
-    result = UnrealizedConversionCastOp::create(builder, loc, type, result)
-                 ->getResult(0);
-  }
-  return result;
-}
-
 // Flatten the given value ranges into a single vector of values.
 SmallVector<Value> flattenValues(ArrayRef<ValueRange> values) {
   SmallVector<Value> result;
@@ -162,11 +142,6 @@ RemoveSignTypeConverter::RemoveSignTypeConverter() {
   addTargetMaterialization(materializeCastFromIllegal);
 }
 
-LinalgTypeConverter::LinalgTypeConverter() : RemoveSignTypeConverter() {
-  addSourceMaterialization(scalarToTensor);
-  addTargetMaterialization(scalarToTensor);
-}
-
 }  // namespace mhlo
 
 namespace stablehlo {
@@ -201,15 +176,16 @@ HloTypeConverter::HloTypeConverter() {
     if (failed(convertTypes(type.getTypes(), convertedTypes))) return {};
     return TupleType::get(type.getContext(), convertedTypes);
   });
+  // Similar to tuple, replace contents with StableHLO/MHLO types.
+  addConversion([&](mhlo::AsyncBundleType bundle) -> Type {
+    SmallVector<Type> convertedTypes;
+    if (failed(convertTypes(bundle.getTypes(), convertedTypes))) return {};
+    return mhlo::AsyncBundleType::get(bundle.getContext(), convertedTypes);
+  });
 }
 
 HloToStablehloTypeConverter::HloToStablehloTypeConverter()
     : HloTypeConverter() {
-  // !mhlo.async_bundle is only used in mhlo.async_start, mhlo.async_update
-  // and mhlo.async_done which are private to XLA.
-  // This means that these ops are deliberately not part of StableHLO,
-  // and as a result this type is not part of StableHLO either.
-  addConversion([](mhlo::AsyncBundleType) -> Type { return {}; });
   addConversion([](mhlo::TokenType type) -> Type {
     return stablehlo::TokenType::get(type.getContext());
   });

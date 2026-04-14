@@ -97,7 +97,7 @@ def standard_or_nightly(standard, nightly):
 REQUIRED_PACKAGES = [
     'absl-py >= 1.0.0',
     'astunparse >= 1.6.0',
-    'flatbuffers >= 25.2.10',
+    'flatbuffers >= 25.9.23',
     'gast >=0.2.1,!=0.5.0,!=0.5.1,!=0.5.2',
     'google_pasta >= 0.1.1',
     'libclang >= 13.0.0',
@@ -123,10 +123,10 @@ REQUIRED_PACKAGES = [
     # dependencies on the release branch is updated to the stable releases (RC
     # or final). For example, 'keras-nightly ~= 2.14.0.dev' will be replaced by
     # 'keras >= 2.14.0rc0, < 2.15' on the release branch after the branch cut.
-    'tb-nightly ~= 2.20.0.a',
-    'keras-nightly >= 3.10.0.dev',
+    'keras-nightly >= 3.12.0.dev',
     'numpy >= 1.26.0',
-    'h5py >= 3.11.0',
+    # Starting with 3.15, only MacOS 14 and 15 are supported.
+    'h5py >= 3.11.0, < 3.15.0' if sys.version_info.minor <= 13 else 'h5py ~= 3.15.1',
     'ml_dtypes >= 0.5.1, < 1.0.0',
 ]
 
@@ -408,7 +408,7 @@ setup(
     # Add in any packaged data.
     zip_safe=False,
     # Supported Python versions
-    python_requires='>=3.9',
+    python_requires='>=3.10',
     # PyPI package information.
     classifiers=sorted([
         'Development Status :: 5 - Production/Stable',
@@ -420,7 +420,6 @@ setup(
         'Intended Audience :: Science/Research',
         'License :: OSI Approved :: Apache Software License',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
         'Programming Language :: Python :: 3.12',

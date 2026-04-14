@@ -25,6 +25,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "google/protobuf/text_format.h"
 #include "xla/debug_options_flags.h"
 #include "xla/hlo/ir/backend_config.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -33,11 +34,7 @@ limitations under the License.
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/stream_executor/dnn.h"
 #include "xla/tsl/platform/env.h"
-#include "xla/tsl/platform/status.h"
 #include "xla/tsl/platform/statusor.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/protobuf.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
 namespace gpu {
@@ -47,7 +44,6 @@ constexpr char kDefaultDenylist[] = R"pb(
     hlo: "(f32[512,512,7,7]{3,2,1,0}, u8[0]{0}) custom-call(f32[512,512,7,7]{3,2,1,0}, f32[512,512,3,3]{3,2,1,0}, f32[512]{0}), window={size=3x3 pad=1_1x1_1}, dim_labels=bf01_oi01->bf01, custom_call_target=\"__cudnn$convBiasActivationForward\""
     backend_config {
       operation_queue_id: 0
-      wait_on_operation_queues: []
       cudnn_conv_backend_config: {
         activation_mode: kNone
         conv_result_scale: 1
@@ -65,7 +61,6 @@ constexpr char kDefaultDenylist[] = R"pb(
     hlo: "(f32[512,512,7,7]{3,2,1,0}, u8[0]{0}) custom-call(f32[512,512,7,7]{3,2,1,0}, f32[512,512,3,3]{3,2,1,0}, f32[512]{0}), window={size=3x3 pad=1_1x1_1}, dim_labels=bf01_oi01->bf01, custom_call_target=\"__cudnn$convBiasActivationForward\""
     backend_config {
       operation_queue_id: 0
-      wait_on_operation_queues: []
       cudnn_conv_backend_config: {
         activation_mode: kNone
         conv_result_scale: 1
@@ -82,7 +77,6 @@ constexpr char kDefaultDenylist[] = R"pb(
     hlo: "(f32[27,256,32,32]{3,2,1,0}, u8[0]{0}) custom-call(f32[27,256,32,32]{3,2,1,0}, f32[256,256,3,3]{3,2,1,0}, f32[256]{0}, f32[27,256,32,32]{3,2,1,0}), window={size=3x3 pad=1_1x1_1}, dim_labels=bf01_oi01->bf01, custom_call_target=\"__cudnn$convBiasActivationForward\""
     backend_config {
       operation_queue_id: 0
-      wait_on_operation_queues: []
       cudnn_conv_backend_config: {
         activation_mode: kNone
         conv_result_scale: 1
@@ -99,7 +93,6 @@ constexpr char kDefaultDenylist[] = R"pb(
     hlo: "(f32[27,256,32,32]{3,2,1,0}, u8[0]{0}) custom-call(f32[27,256,32,32]{3,2,1,0}, f32[256,256,3,3]{3,2,1,0}, f32[256]{0}, f32[27,256,32,32]{3,2,1,0}), window={size=3x3 pad=1_1x1_1}, dim_labels=bf01_oi01->bf01, custom_call_target=\"__cudnn$convBiasActivationForward\""
     backend_config {
       operation_queue_id: 0
-      wait_on_operation_queues: []
       cudnn_conv_backend_config: {
         activation_mode: kNone
         conv_result_scale: 1
@@ -116,7 +109,6 @@ constexpr char kDefaultDenylist[] = R"pb(
     hlo: "(f32[27,256,32,32]{3,2,1,0}, u8[0]{0}) custom-call(f32[27,256,32,32]{3,2,1,0}, f32[256,256,3,3]{3,2,1,0}, f32[256]{0}, f32[27,256,32,32]{3,2,1,0}), window={size=3x3 pad=1_1x1_1}, dim_labels=bf01_oi01->bf01, custom_call_target=\"__cudnn$convBiasActivationForward\""
     backend_config {
       operation_queue_id: 0
-      wait_on_operation_queues: []
       cudnn_conv_backend_config: {
         activation_mode: kNone
         conv_result_scale: 1
@@ -133,7 +125,6 @@ constexpr char kDefaultDenylist[] = R"pb(
     hlo: "(f32[27,256,32,32]{3,2,1,0}, u8[0]{0}) custom-call(f32[27,256,32,32]{3,2,1,0}, f32[256,256,3,3]{3,2,1,0}, f32[256]{0}, f32[27,256,32,32]{3,2,1,0}), window={size=3x3 pad=1_1x1_1}, dim_labels=bf01_oi01->bf01, custom_call_target=\"__cudnn$convBiasActivationForward\""
     backend_config {
       operation_queue_id: 0
-      wait_on_operation_queues: []
       cudnn_conv_backend_config: {
         activation_mode: kNone
         conv_result_scale: 1
@@ -151,7 +142,6 @@ constexpr char kDefaultDenylist[] = R"pb(
     backend_config {
       force_earliest_schedule: false
       operation_queue_id: 0
-      wait_on_operation_queues: []
       cudnn_conv_backend_config: {
         activation_mode: kNone
         conv_result_scale: 1
@@ -215,11 +205,11 @@ std::vector<stream_executor::dnn::AlgorithmDesc> GetDisabledConvAlgorithms(
         GetDebugOptionsFromFlags().xla_gpu_algorithm_denylist_path();
     if (!file_path.empty()) {
       std::string denylist_text;
-      TF_CHECK_OK(tsl::ReadFileToString(tsl::Env::Default(), file_path,
-                                        &denylist_text));
-      TF_CHECK_OK(ParseTextFormatDenyList(*list, denylist_text));
+      CHECK_OK(tsl::ReadFileToString(tsl::Env::Default(), file_path,
+                                     &denylist_text));
+      CHECK_OK(ParseTextFormatDenyList(*list, denylist_text));
     }
-    TF_CHECK_OK(ParseTextFormatDenyList(*list, kDefaultDenylist));
+    CHECK_OK(ParseTextFormatDenyList(*list, kDefaultDenylist));
     return list;
   }();
 

@@ -129,11 +129,19 @@ class OriginalValue {
 
   bool IsCompatibleWith(const Shape& shape) const;
 
+  bool IsTuple() const { return tree().IsTuple(); }
+
   bool operator==(const OriginalValue& other) const;
 
   bool operator!=(const OriginalValue& other) const {
     return !(*this == other);
   }
+
+  // Gets the (partial) call hierarchy string of the original call instructions
+  // that this OriginalValue is associated with. Returns std::nullopt if this
+  // OriginalValue is not associated with a call instruction or the call
+  // hierarchy is lost (e.g., after complicated optimizations).
+  std::optional<std::string> GetOriginalCallLikeInstructions() const;
 
   template <typename H>
   friend H AbslHashValue(H h, const OriginalValue& value) {
@@ -159,15 +167,5 @@ class OriginalValue {
       data_;
 };
 
-// Copies the original value of the source to the destination instruction. This
-// performs a deep copy if clone is set to true. Otherwise, it performs a
-// shallow copy.
-void CopyOriginalValue(const HloInstruction* src_instruction,
-                       HloInstruction* dest_instruction, bool clone);
-
-// Removes duplicates of original value objects referenced in the module to save
-// memory storage.
-void DeduplicateOriginalValues(HloModule* module);
 }  // namespace xla
-
 #endif  // XLA_HLO_IR_HLO_ORIGINAL_VALUE_H_

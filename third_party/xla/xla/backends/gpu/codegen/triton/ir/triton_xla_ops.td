@@ -87,7 +87,7 @@ def TTXLA_ExtractOp : TTXLA_OpWithOffsetSizesAndStrides<"extract", [
     Example:
       ```
       %extracted_tensor = triton_xla.extract from %src
-        as memref<512x128xbf16, #triton_xla.layout<[1, 0]>>
+        as memref<512x128xbf16, #xtile.layout<[1, 0]>>
         [0, 0] [16, 64] [128, 1] : tensor<16x64xbf16>
       ```
   }];
@@ -148,7 +148,7 @@ def TTXLA_InsertOp : TTXLA_OpWithOffsetSizesAndStrides<"insert"> {
     Example:
       ```
       triton_xla.insert %src into %dst
-        as memref<512x128xbf16, #triton_xla.layout<[1, 0]>>
+        as memref<512x128xbf16, #xtile.layout<[1, 0]>>
         [0, 0] [8, 8] [1, 1] : tensor<8x8xbf16>
       ```
   }];
@@ -388,6 +388,78 @@ def TTXLA_BlockBarrierOp : TTXLA_Op<"block_barrier", []> {
     functional-type(operands, results)
   }];
 }
+
+def TTXLA_GetRankOp : TTXLA_Op<"get_rank", [Pure]> {
+  let summary = "Extract the device rank from the collectives metadata.";
+  let arguments = (ins
+    Arg<TT_PtrLike, "",
+      [MemRead<GlobalMemory>]>:$metadata);
+  let results = (outs I64:$result);
+  let assemblyFormat = "$metadata attr-dict `:` type($metadata) `->` type($result)";
+}
+
+def TTXLA_GetPeerPtrOp : TTXLA_Op<"get_peer_ptr", [Pure]> {
+  let summary = [{
+    Extract the pointer to the given symmetric memory `address` on the given
+    `peer` device. An `address` should point to the memory of the given kernel
+    argument with `argument_index`. The result is calculated using the symmetric
+    memory `metadata` constructed at the runtime.
+    To calculate offsets operation also need to know the number of devices
+    participating in the collective operation (`world_size`).
+  }];
+  let arguments = (ins
+    Arg<TT_PtrLike, "",
+      [MemRead<GlobalMemory>]>:$address,
+    I64:$peer_id,
+    Arg<TT_PtrLike, "",
+      [MemRead<GlobalMemory>]>:$metadata,
+    I32Attr:$argument_index,
+    // The number of devices participating in the collective operation.
+    I32Attr:$world_size);
+
+  let results = (outs Arg<TT_PtrLike, "", [MemRead<GlobalMemory>]>:$result);
+
+  let assemblyFormat = [{
+    $address `,` $peer_id `,` $metadata `,` attr-dict `:`
+    functional-type(operands, results)
+  }];
+}
+
+def TTXLA_MemrefToPtrOp : TTXLA_Op<"memref_to_ptr", [Pure]> {
+  let summary = [{
+    A specialized version of unrealized_conversion_cast that converts a
+    memref to a pointer.
+  }];
+
+  let arguments = (ins AnyMemRef:$src);
+
+  let results = (outs TT_Ptr:$result);
+
+  let assemblyFormat = [{
+    $src `from` type($src) `to` type($result) attr-dict
+  }];
+
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
+def TTXLA_PtrToMemrefOp : TTXLA_Op<"ptr_to_memref", [Pure]> {
+  let summary = [{
+    A specialized version of unrealized_conversion_cast that converts a
+    pointer to a memref.
+  }];
+
+  let arguments = (ins TT_Ptr:$src);
+
+  let results = (outs AnyMemRef:$result);
+
+  let assemblyFormat = [{
+    $src `from` type($src) `to` type($result) attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
 
 #endif // XLA_BACKENDS_GPU_CODEGEN_TRITON_IR_TRITON_XLA_OPS_TD_
 

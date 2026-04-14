@@ -25,8 +25,10 @@ limitations under the License.
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "xla/tsl/platform/types.h"
 #include "xla/tsl/profiler/utils/math_utils.h"
@@ -228,6 +230,44 @@ std::vector<XPlane*> FindMutablePlanesWithPrefix(XSpace* space,
   });
 }
 
+void SetXSpacePidIfNotSet(XSpace& space, int32_t pid) {
+  for (XPlane& plane : *space.mutable_planes()) {
+    SetXPlanePidIfNotSet(plane, pid);
+  }
+}
+
+void SetXPlanePidIfNotSet(XPlane& plane, int32_t pid) {
+  XPlaneBuilder builder(&plane);
+  XStatMetadata* pid_stat_metadata =
+      builder.GetOrCreateStatMetadata(GetStatTypeStr(StatType::kProcessId));
+  if (!builder.GetStat(*pid_stat_metadata)) {
+    builder.SetOrAddStatValue(*pid_stat_metadata, pid);
+  }
+}
+
+void MergeSubprocessXSpace(XSpace& dst, const XSpace& src) {
+  for (const XPlane& plane : src.planes()) {
+    VLOG(3) << "Merging plane: " << plane.name();
+    XPlaneVisitor visitor = CreateTfXPlaneVisitor(&plane);
+    auto pid_stat = visitor.GetStat(StatType::kProcessId);
+    if (!pid_stat.has_value()) {
+      LOG(WARNING) << "No PID found in XPlane: " << plane.name()
+                   << ". Skipping merging plane.";
+      continue;
+    }
+    int32_t pid = pid_stat->IntOrUintValue();
+    XPlane& copied_plane = *dst.add_planes();
+    copied_plane = plane;
+    copied_plane.set_name(absl::StrCat(plane.name(), " [", pid, "]"));
+  }
+  for (const auto& warning : src.warnings()) {
+    dst.add_warnings(warning);
+  }
+  for (const auto& error : src.errors()) {
+    dst.add_errors(error);
+  }
+}
+
 const XLine* FindLineWithId(const XPlane& plane, int64_t id) {
   int i =
       Find(plane.lines(), [id](const XLine* line) { return line->id() == id; });
@@ -285,8 +325,9 @@ void RemoveEvents(XLine* line,
 }
 
 void RemoveEmptyPlanes(XSpace* space) {
-  RemoveIf(space->mutable_planes(),
-           [&](const XPlane* plane) { return plane->lines().empty(); });
+  RemoveIf(space->mutable_planes(), [&](const XPlane* plane) {
+    return plane->lines().empty() && plane->stats().empty();
+  });
 }
 
 void RemoveEmptyLines(XPlane* plane) {
@@ -316,17 +357,43 @@ void SortXSpace(XSpace* space) {
 // The assumption is that both line's timestamp_ns and start_time_ns are
 // nano-seconds from epoch time, the different of these values is much
 // smaller than these value.
-void NormalizeTimestamps(XPlane* plane, uint64 start_time_ns) {
+void NormalizeTimestamps(XPlane* plane, uint64_t start_time_ns) {
   for (XLine& line : *plane->mutable_lines()) {
     if (line.timestamp_ns() >= static_cast<int64_t>(start_time_ns)) {
       line.set_timestamp_ns(line.timestamp_ns() - start_time_ns);
+    } else {
+      // When this happen, we suppose that the line.timestamp_ns() should
+      // already be normalized, i.e., pretty small. Here use MAX_INT64 / 1000
+      // to check, supposing when it convert to picosecond, it should not cause
+      // overflow.
+      if (line.timestamp_ns() >= std::numeric_limits<int64_t>::max() / 1000) {
+        LOG(ERROR) << "line.timestamp_ns() " << line.timestamp_ns()
+                   << " is too large, which means the line.timestamp_ns() is "
+                      "not normalized before, "
+                      "and here it is normalized to some timestamp after it:"
+                   << start_time_ns;
+      }
     }
   }
 }
 
-void NormalizeTimestamps(XSpace* space, uint64 start_time_ns) {
+void NormalizeTimestamps(XSpace* space, uint64_t start_time_ns) {
   for (XPlane& plane : *space->mutable_planes()) {
     NormalizeTimestamps(&plane, start_time_ns);
+  }
+}
+
+void DenormalizeTimestamps(XPlane* plane, uint64_t start_time_ns) {
+  for (XLine& line : *plane->mutable_lines()) {
+    if (line.timestamp_ns() < static_cast<int64_t>(start_time_ns)) {
+      line.set_timestamp_ns(line.timestamp_ns() + start_time_ns);
+    }
+  }
+}
+
+void DenormalizeTimestamps(XSpace* space, uint64_t start_time_ns) {
+  for (XPlane& plane : *space->mutable_planes()) {
+    DenormalizeTimestamps(&plane, start_time_ns);
   }
 }
 
@@ -338,6 +405,13 @@ void MergePlanes(const XPlane& src_plane, XPlane* dst_plane) {
     XStatMetadata* stat_metadata = dst.GetOrCreateStatMetadata(stat.Name());
     // Use SetOrAddStat to avoid duplicating stats in dst_plane.
     dst.SetOrAddStat(*stat_metadata, stat.RawStat(), src_plane);
+  });
+
+  src.ForEachEventMetadata([&](const XEventMetadataVisitor& event_metadata) {
+    XEventMetadata* dst_event_metadata =
+        dst.GetOrCreateEventMetadata(event_metadata.Name());
+    CopyEventMetadata(*event_metadata.metadata(), src, *dst_event_metadata,
+                      dst);
   });
   src.ForEachLine([&](const XLineVisitor& line) {
     XLineBuilder dst_line = dst.GetOrCreateLine(line.Id());
@@ -553,7 +627,7 @@ void AggregateXPlane(const XPlane& full_trace, XPlane& aggregated_trace) {
   aggregated_plane.SetName(plane.Name());
   aggregated_plane.SetId(plane.Id());
 
-  uint64_t first_op_start_ps = kint64max;
+  uint64_t first_op_start_ps = std::numeric_limits<int64_t>::max();
   uint64_t last_op_end_ps = 0;
 
   plane.ForEachLine([&](const XLineVisitor& line) {
@@ -580,8 +654,9 @@ void AggregateXPlane(const XPlane& full_trace, XPlane& aggregated_trace) {
                            ? last_op_end_ps
                            : timespan.end_ps();
       const auto& group_stat = event.GetStat(StatType::kGroupId);
-      int64_t group_id =
-          group_stat.has_value() ? group_stat->IntOrUintValue() : kint64max;
+      int64_t group_id = group_stat.has_value()
+                             ? group_stat->IntOrUintValue()
+                             : std::numeric_limits<int64_t>::max();
 
       StatByEvent& line_stats = stats[line.Id()][group_id];
       line_stats[event.Id()].stat.UpdateStat(timespan.duration_ps());
@@ -632,7 +707,7 @@ void AggregateXPlane(const XPlane& full_trace, XPlane& aggregated_trace) {
             aggregated_line.AddEvent(event_metadata);
         aggregated_event.SetNumOccurrences(event_stat.stat.count());
         aggregated_event.SetDurationPs(event_stat.stat.sum());
-        if (group_id != kint64max) {
+        if (group_id != std::numeric_limits<int64_t>::max()) {
           aggregated_event.AddStatValue(*kGroupId, group_id);
         }
         if (event_stat.stat.count() > 1) {

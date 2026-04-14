@@ -20,7 +20,7 @@ cc_library(
         "//xla/tsl/platform:types",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/synchronization",
-        "@local_tsl//tsl/platform:thread_annotations",
+        "@tsl//tsl/platform:thread_annotations",
     ] + if_static([
         ":traceme_recorder_impl",
     ]),
@@ -49,7 +49,6 @@ cc_library(
         "//xla/tsl/profiler/utils:lock_free_queue",
         "//xla/tsl/profiler/utils:per_thread",
         "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:flat_hash_set",
     ],
     alwayslink = True,
 )
@@ -58,10 +57,9 @@ tsl_cc_test(
     name = "traceme_recorder_test",
     srcs = ["traceme_recorder_test.cc"],
     deps = [
-        ":traceme_recorder",
         ":traceme_recorder_impl",
         "//xla/tsl/platform:env",
-        "//xla/tsl/platform:env_impl",
+        "//xla/tsl/platform:env_impl",  # buildcleaner: keep
         "//xla/tsl/platform:logging",
         "//xla/tsl/platform:test",
         "//xla/tsl/platform:types",
@@ -131,7 +129,7 @@ cc_library(
         "//xla/tsl/profiler/utils:xplane_builder",
         "//xla/tsl/profiler/utils:xplane_utils",
         "@com_google_absl//absl/strings",
-        "@local_tsl//tsl/profiler/protobuf:xplane_proto_cc",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )
 
@@ -156,11 +154,11 @@ cc_library(
         "//xla/tsl/profiler/utils:xplane_schema",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
-        "@local_tsl//tsl/platform:tracing",
-        "@local_tsl//tsl/profiler/lib:context_types_hdrs",
-        "@local_tsl//tsl/profiler/lib:profiler_interface",
-        "@local_tsl//tsl/profiler/lib:traceme_encode",
-        "@local_tsl//tsl/profiler/protobuf:xplane_proto_cc",
+        "@tsl//tsl/platform:tracing",
+        "@tsl//tsl/profiler/lib:context_types_hdrs",
+        "@tsl//tsl/profiler/lib:profiler_interface",
+        "@tsl//tsl/profiler/lib:traceme_encode",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )
 
@@ -169,7 +167,63 @@ cc_library(
     srcs = ["threadpool_listener_state.cc"],
     hdrs = ["threadpool_listener_state.h"],
     visibility = internal_visibility([
-        "@local_tsl//tsl/platform:__subpackages__",
+        "@tsl//tsl/platform:__subpackages__",
         "//xla/tsl/platform:__subpackages__",
     ]),
+)
+
+cc_library(
+    name = "traceme_encode_benchmark",
+    testonly = True,
+    srcs = ["traceme_encode_benchmark.cc"],
+    visibility = ["//xla/backends/profiler/cpu:__pkg__"],
+    deps = [
+        "@com_google_absl//absl/log:flags",
+        "@com_google_absl//absl/strings",
+        "@com_google_benchmark//:benchmark",
+        "@tsl//tsl/platform:platform_port",
+        "@tsl//tsl/profiler/lib:traceme_encode",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "traceme_benchmark",
+    testonly = True,
+    srcs = ["traceme_benchmark.cc"],
+    visibility = ["//xla/backends/profiler/cpu:__pkg__"],
+    deps = [
+        "//xla/tsl/profiler/utils:trace_filter_utils",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/log:die_if_null",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_benchmark//:benchmark",
+        "@tsl//tsl/platform:platform_port",
+        "@tsl//tsl/profiler/lib:profiler_session",
+        "@tsl//tsl/profiler/lib:traceme",
+        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "connected_traceme_benchmark",
+    testonly = True,
+    srcs = ["connected_traceme_benchmark.cc"],
+    visibility = ["//xla/backends/profiler/cpu:__pkg__"],
+    deps = [
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/log:die_if_null",
+        "@com_google_benchmark//:benchmark",
+        "@tsl//tsl/platform:platform_port",
+        "@tsl//tsl/profiler/lib:connected_traceme",
+        "@tsl//tsl/profiler/lib:context_types_hdrs",
+        "@tsl//tsl/profiler/lib:profiler_session",
+        "@tsl//tsl/profiler/lib:traceme",
+        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+    ],
+    alwayslink = True,
 )

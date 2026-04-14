@@ -1,10 +1,11 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("//third_party/compute_library:build_defs.bzl", "if_enable_acl")
 
+# copybara:uncomment load("//devtools/build_cleaner/skylark:action_config_test.bzl", "action_config_test")
 # copybara:uncomment load("@rules_python//python:proto.bzl", "py_proto_library")
 load("//xla:package_groups.bzl", "xla_package_groups")
 load("//xla:xla.default.bzl", "xla_bzl_library", "xla_cc_test", "xla_py_proto_library")
-load("//xla/tsl:tsl.bzl", "if_google", "internal_visibility")
+load("//xla/tsl:tsl.bzl", "if_google", "if_oss", "internal_visibility")
 load("//xla/tsl:tsl.default.bzl", "filegroup", "get_compatible_with_portable")
 load(
     "//xla/tsl/platform:build_config.bzl",
@@ -18,6 +19,10 @@ package(
     default_visibility = internal_visibility(["//xla:internal"]),
     licenses = ["notice"],
 )
+
+exports_files([
+    "sh_test_with_runfiles.py",
+])
 
 exports_files([
     "lit.cfg.py",
@@ -43,7 +48,6 @@ filegroup(
 filegroup(
     name = "cpu_runtime_srcs",
     srcs = [
-        "cpu_function_runtime.cc",
         "executable_run_options.cc",
     ],
     visibility = internal_visibility([":friends"]),
@@ -52,7 +56,6 @@ filegroup(
 filegroup(
     name = "cpu_runtime_hdrs",
     srcs = [
-        "cpu_function_runtime.h",
         "executable_run_options.h",
         "types.h",
     ],
@@ -72,11 +75,13 @@ tf_proto_library(
     srcs = ["xla.proto"],
     create_grpc_library = True,
     make_default_target_header_only = True,
-    protodeps = [
-        ":xla_data_proto",
-        "//xla/service:hlo_proto",
-    ] + if_google(["@com_google_protobuf//:any"]),
     visibility = ["//visibility:public"],
+    deps = [
+        ":xla_data_proto",
+        "//xla/backends/autotuner:backends_proto",
+        "//xla/service:hlo_proto",
+        "@com_google_protobuf//:any_proto",
+    ],
 )
 
 cc_library(
@@ -87,7 +92,7 @@ cc_library(
         ":types",
         "@com_google_absl//absl/base",
         "@eigen_archive//:eigen3",
-        "@local_tsl//tsl/platform:bfloat16",
+        "@tsl//tsl/platform:bfloat16",
     ],
 )
 
@@ -99,7 +104,7 @@ xla_cc_test(
         "//xla/hlo/testlib:test",
         "//xla/tsl/platform:test_main",
         "@eigen_archive//:eigen3",
-        "@local_tsl//tsl/platform:bfloat16",
+        "@tsl//tsl/platform:bfloat16",
     ],
 )
 
@@ -126,7 +131,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
-        "@local_tsl//tsl/platform:ml_dtypes",
+        "@tsl//tsl/platform:ml_dtypes",
     ],
 )
 
@@ -212,7 +217,8 @@ cc_library(
     deps = [
         "@com_google_absl//absl/strings",
         "@eigen_archive//:eigen3",
-        "@local_tsl//tsl/platform:ml_dtypes",
+        "@ml_dtypes_py//ml_dtypes:intn",
+        "@tsl//tsl/platform:ml_dtypes",
     ],
 )
 
@@ -246,7 +252,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@local_tsl//tsl/platform:stacktrace",
+        "@tsl//tsl/platform:stacktrace",
     ],
 )
 
@@ -293,7 +299,7 @@ xla_cc_test(
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/numeric:bits",
         "@com_google_googletest//:gtest",
-        "@local_tsl//tsl/platform:ml_dtypes",
+        "@tsl//tsl/platform:ml_dtypes",
     ],
 )
 
@@ -303,7 +309,6 @@ cc_library(
     hdrs = [
         "iterator_util.h",
         "map_util.h",
-        "maybe_owning.h",
         "overflow_util.h",
         "util.h",
     ],
@@ -335,13 +340,14 @@ cc_library(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
+        "@com_google_protobuf//:protobuf",
         "@eigen_archive//:eigen3",
-        "@local_tsl//tsl/platform:bfloat16",
-        "@local_tsl//tsl/platform:casts",
-        "@local_tsl//tsl/platform:ml_dtypes",
-        "@local_tsl//tsl/platform:numbers",
-        "@local_tsl//tsl/platform:protobuf",
-        "@local_tsl//tsl/platform:stacktrace",
+        "@tsl//tsl/platform:bfloat16",
+        "@tsl//tsl/platform:casts",
+        "@tsl//tsl/platform:ml_dtypes",
+        "@tsl//tsl/platform:numbers",
+        "@tsl//tsl/platform:protobuf",
+        "@tsl//tsl/platform:stacktrace",
     ],
 )
 
@@ -355,6 +361,8 @@ xla_cc_test(
         "//xla/hlo/testlib:test",
         "//xla/tsl/platform:logging",
         "//xla/tsl/platform:test_main",
+        "//xla/tsl/util:maybe_owning",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:log_severity",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/log:check",
@@ -362,8 +370,8 @@ xla_cc_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest",
-        "@local_tsl//tsl/platform:ml_dtypes",
         "@ml_dtypes_py//ml_dtypes:float8",
+        "@tsl//tsl/platform:ml_dtypes",
     ],
 )
 
@@ -386,6 +394,8 @@ xla_cc_test(
         ":permutation_util",
         "//xla/hlo/testlib:test",
         "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -403,8 +413,9 @@ cc_library(
         "//xla/tsl/platform:errors",
         "@com_google_absl//absl/hash",
         "@com_google_absl//absl/status",
-        "@local_tsl//tsl/platform:path",
-        "@local_tsl//tsl/platform:protobuf",
+        "@com_google_protobuf//:protobuf",
+        "@tsl//tsl/platform:path",
+        "@tsl//tsl/platform:protobuf",
     ],
 )
 
@@ -415,6 +426,16 @@ xla_cc_test(
         ":util",
         "//xla/hlo/testlib:test",
         "//xla/tsl/platform:test_main",
+    ],
+)
+
+cc_library(
+    name = "future",
+    hdrs = ["future.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//xla/tsl/concurrency:future",
+        "//xla/tsl/concurrency:interop",
     ],
 )
 
@@ -452,7 +473,6 @@ cc_library(
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:logging",
         "//xla/tsl/platform:macros",
-        "//xla/tsl/platform:status",
         "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:core_headers",
@@ -468,8 +488,8 @@ cc_library(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
-        "@local_tsl//tsl/platform:ml_dtypes",
-        "@local_tsl//tsl/platform:platform_port",
+        "@tsl//tsl/platform:ml_dtypes",
+        "@tsl//tsl/platform:platform_port",
     ],
 )
 
@@ -494,6 +514,7 @@ xla_cc_test(
     deps = [
         ":shape_pool",
         ":shape_util",
+        ":xla_data_proto_cc",
         "//xla/tsl/platform:test",
         "//xla/tsl/platform:test_benchmark",
         "//xla/tsl/platform:test_main",
@@ -547,15 +568,16 @@ xla_cc_test(
         ":xla_data_proto_cc",
         "//xla/hlo/testlib:test",
         "//xla/tsl/platform:env",
-        "//xla/tsl/platform:statusor",
         "//xla/tsl/platform:test_benchmark",
         "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest",
-        "@local_tsl//tsl/platform:protobuf",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 
@@ -584,6 +606,8 @@ xla_cc_test(
         "//xla/hlo/testlib:test_helpers",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -596,9 +620,7 @@ xla_cc_test(
         ":xla_data_proto_cc",
         "//xla/hlo/testlib:test",
         "//xla/hlo/testlib:test_helpers",
-        "//xla/tsl/platform:errors",
         "//xla/tsl/platform:logging",
-        "//xla/tsl/platform:status_matchers",
         "//xla/tsl/platform:test_main",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest",
@@ -653,10 +675,11 @@ cc_library(
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:logging",
         "//xla/tsl/platform:macros",
-        "//xla/tsl/platform:status",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/util:byte_swap_array",
+        "//xla/tsl/util:maybe_owning",
         "//xla/tsl/util:safe_reinterpret_cast",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:no_destructor",
@@ -668,8 +691,8 @@ cc_library(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
         "@eigen_archive//:eigen3",
-        "@local_tsl//tsl/platform:ml_dtypes",
-        "@local_tsl//tsl/platform:platform_port",
+        "@tsl//tsl/platform:ml_dtypes",
+        "@tsl//tsl/platform:platform_port",
     ],
 )
 
@@ -697,6 +720,7 @@ xla_cc_test(
         "//xla/tsl/platform:test_benchmark",
         "//xla/tsl/platform:test_main",
         "//xla/tsl/util:safe_reinterpret_cast",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/hash",
         "@com_google_absl//absl/random",
@@ -704,7 +728,7 @@ xla_cc_test(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest",
-        "@local_tsl//tsl/platform:ml_dtypes",
+        "@tsl//tsl/platform:ml_dtypes",
     ],
 )
 
@@ -750,17 +774,18 @@ cc_library(
         ":types",
         ":util",
         ":xla_data_proto_cc",
+        "//xla/tests:constraint_state",
         "//xla/tsl/lib/core:bitmap",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:logging",
-        "//xla/tsl/platform:status",
         "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/random:distributions",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
-        "@local_tsl//tsl/platform:ml_dtypes",
+        "@tsl//tsl/platform:ml_dtypes",
     ],
 )
 
@@ -783,7 +808,7 @@ xla_cc_test(
         "//xla/tsl/lib/core:status_test_util",
         "//xla/tsl/platform:test_main",
         "@com_google_googletest//:gtest",
-        "@local_tsl//tsl/platform:ml_dtypes",
+        "@tsl//tsl/platform:ml_dtypes",
     ],
 )
 
@@ -875,7 +900,7 @@ xla_cc_test(
         "//xla/hlo/testlib:test",
         "//xla/tsl/platform:test_main",
         "@eigen_archive//:eigen3",
-        "@local_tsl//tsl/platform:ml_dtypes",
+        "@tsl//tsl/platform:ml_dtypes",
     ],
 )
 
@@ -997,6 +1022,9 @@ xla_cc_test(
         "//xla/hlo/testlib:test",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1077,7 +1105,6 @@ cc_library(
         ":shape_util",
         ":util",
         "//xla/tsl/platform:logging",
-        "//xla/tsl/platform:status",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
     ],
@@ -1193,6 +1220,7 @@ xla_cc_test(
             "//xla/tsl/platform:subprocess",
             "//xla/tsl/platform:test",
             "//xla/tsl/util:command_line_flags",
+            "//xla/tsl/util:env_var",
             "@com_google_absl//absl/log:check",
             "@com_google_absl//absl/strings:str_format",
             "@com_google_googletest//:gtest",
@@ -1203,15 +1231,22 @@ cc_library(
     name = "debug_options_flags",
     srcs = [
         "debug_options_flags.cc",
+        "debug_options_parsers.cc",
         "debug_options_parsers.h",
     ],
     hdrs = ["debug_options_flags.h"],
-    copts = if_enable_acl(["-DXLA_CPU_USE_ACL=1"]),
+    copts = if_enable_acl([
+        "-DXLA_CPU_USE_ACL=1",
+    ]) + if_oss([
+        "-DHAS_SUPPORT_FOR_LLD_AS_A_LIBRARY=1",
+        "-DHAS_SUPPORT_FOR_EMBEDDED_LIB_DEVICE=1",
+    ]),
     visibility = internal_visibility([":friends"]),
     deps =
         [
             ":parse_flags_from_env",
             ":xla_proto_cc",
+            "//xla/backends/autotuner:backends_proto_cc",
             "//xla/service:collective_utils",
             "//xla/stream_executor/cuda:nvjitlink_support",
             "//xla/stream_executor/cuda:ptx_compiler_support",
@@ -1229,8 +1264,9 @@ cc_library(
             "@com_google_absl//absl/status:statusor",
             "@com_google_absl//absl/strings",
             "@com_google_absl//absl/strings:str_format",
-            "@local_tsl//tsl/platform:platform_port",
-            "@local_tsl//tsl/platform:protobuf",
+            "@com_google_absl//absl/time",
+            "@com_google_protobuf//:protobuf",
+            "@tsl//tsl/platform:platform_port",
         ],
 )
 
@@ -1242,20 +1278,8 @@ xla_cc_test(
         "//xla/tsl/platform:test_main",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_googletest//:gtest",
-        "@local_tsl//tsl/platform:protobuf",
-    ],
-)
-
-cc_library(
-    name = "cpu_function_runtime",
-    srcs = ["cpu_function_runtime.cc"],
-    hdrs = ["cpu_function_runtime.h"],
-    compatible_with = get_compatible_with_portable(),
-    visibility = internal_visibility([":friends"]),
-    deps = [
-        "//xla/backends/cpu:alignment",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/base:dynamic_annotations",
+        "@com_google_protobuf//:protobuf",
+        "@tsl//tsl/platform:protobuf",
     ],
 )
 
@@ -1271,6 +1295,7 @@ xla_cc_test(
             ":debug_options_flags",
             ":parse_flags_from_env",
             ":xla_proto_cc",
+            "//xla/backends/autotuner:backends_proto_cc",
             "//xla/service:dump",
             "//xla/tsl/platform:env",
             "//xla/tsl/platform:test",
@@ -1281,7 +1306,7 @@ xla_cc_test(
             "@com_google_absl//absl/status:statusor",
             "@com_google_absl//absl/strings",
             "@com_google_googletest//:gtest",
-            "@local_tsl//tsl/platform:protobuf",
+            "@com_google_protobuf//:protobuf_lite",
         ],
 )
 
@@ -1294,6 +1319,7 @@ cc_library(
     name = "side_effect_util",
     srcs = ["side_effect_util.cc"],
     hdrs = ["side_effect_util.h"],
+    visibility = internal_visibility([":friends"]),
 )
 
 cc_library(
@@ -1302,12 +1328,24 @@ cc_library(
     deps = ["@com_google_absl//absl/functional:any_invocable"],
 )
 
+xla_cc_test(
+    name = "lazy_test",
+    srcs = ["lazy_test.cc"],
+    deps = [
+        ":lazy",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
 tf_proto_library(
     name = "autotune_results_proto",
     srcs = ["autotune_results.proto"],
     make_default_target_header_only = True,
-    protodeps = [":autotuning_proto"],
     visibility = ["//visibility:public"],
+    deps = [":autotuning_proto"],
 )
 
 xla_py_proto_library(
@@ -1330,12 +1368,11 @@ tf_proto_library(
     name = "autotuning_proto",
     srcs = ["autotuning.proto"],
     make_default_target_header_only = True,
-    protodeps = [
+    deps = [
         "//xla/tsl/protobuf:dnn_proto",
-    ] + if_google([
-        "@com_google_protobuf//:any",
-        "@com_google_protobuf//:duration",
-    ]),
+        "@com_google_protobuf//:any_proto",
+        "@com_google_protobuf//:duration_proto",
+    ],
 )
 
 cc_library(
@@ -1379,6 +1416,10 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:cord",
         "@com_google_absl//absl/types:span",
+        "@highwayhash",
+        "@highwayhash//:arch_specific",
+        "@highwayhash//:hh_types",
+        "@tsl//tsl/platform:fingerprint",
     ],
 )
 
@@ -1396,6 +1437,11 @@ cc_library(
 #     compatible_with = get_compatible_with_portable(),
 #     visibility = internal_visibility([":friends"]),
 #     deps = [":xla_proto"],
+# )
+#
+# action_config_test(
+#     name = "build_cleaner_spec_test",
+#     src = "build_cleaner_spec.textproto",
 # )
 # copybara:uncomment_end
 
@@ -1419,7 +1465,6 @@ xla_cc_test(
     srcs = ["sort_json_test.cc"],
     deps = [
         ":sort_json",
-        "//xla/tsl/platform:status_matchers",
         "//xla/tsl/platform:test",
         "//xla/tsl/platform:test_main",
         "@com_google_absl//absl/status:status_matchers",
@@ -1490,6 +1535,7 @@ bzl_library(
     name = "lit_bzl",
     srcs = ["lit.bzl"],
     deps = [
+        "//xla/tests:build_defs_bzl",
         "@rules_cc//cc/common",
         # copybara:uncomment "@rules_python//python:defs_bzl",
         "@bazel_skylib//lib:paths",
